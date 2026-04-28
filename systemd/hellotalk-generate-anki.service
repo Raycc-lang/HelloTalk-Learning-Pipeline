@@ -1,0 +1,13 @@
+[Unit]
+Description=Generate HelloTalk Anki card TSVs from AI analysis
+# Manually triggered: not chained to hellotalk-analyze.service.
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/hellotalk-generate-anki.sh
+Environment=HOME=%h
+EnvironmentFile=%h/.config/hellotalk/env
+TimeoutStartSec=14400
+
+[Install]
+WantedBy=default.target

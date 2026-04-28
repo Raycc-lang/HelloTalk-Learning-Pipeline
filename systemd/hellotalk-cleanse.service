@@ -1,0 +1,13 @@
+[Unit]
+Description=Cleanse HelloTalk transcripts (remove noise, artifacts, private content)
+After=hellotalk-transcribe.service
+OnSuccess=hellotalk-analyze.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/hellotalk-cleanse.sh
+Environment=HOME=%h
+TimeoutStartSec=7200
+
+[Install]
+WantedBy=default.target

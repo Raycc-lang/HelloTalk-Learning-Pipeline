@@ -1,0 +1,11 @@
+[Unit]
+Description=Run HelloTalk AI analysis periodically
+
+[Timer]
+# Run every 6 hours, offset from cleanse timer
+OnCalendar=*-*-* 00/6:30:00
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily processing of HelloTalk audio at 12:05
+
+[Timer]
+OnCalendar=*-*-* 12:05:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

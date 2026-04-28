@@ -1,0 +1,18 @@
+[Unit]
+Description=Transcribe HelloTalk captured audio using NVIDIA Whisper gRPC
+After=hellotalk-process-audio.service
+OnSuccess=hellotalk-cleanse.service
+StartLimitIntervalSec=3600
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/hellotalk-transcribe.sh
+Environment=HOME=%h
+EnvironmentFile=%h/.config/hellotalk/env
+TimeoutStartSec=7200
+Restart=on-failure
+RestartSec=120
+
+[Install]
+WantedBy=default.target

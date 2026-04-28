@@ -1,0 +1,41 @@
+# Gradle / Android
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+*.apk
+*.aab
+*.dex
+*.class
+
+# Captured audio / pipeline data
+*.wav
+*.pcm
+*.mp3
+Original_audio/
+Processed_audio/
+Transcribed_audio/
+Transcripts/
+Cleaned_Transcripts/
+Cleansed_Originals/
+Analysis/
+Anki/
+Archives/
+Failed_transcription/
+Nova3_Trial/
+
+# Secrets
+.env
+config/env
+config/cleanse.conf
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db

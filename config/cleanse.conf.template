@@ -1,0 +1,18 @@
+# HelloTalk Transcript Cleansing — Privacy Blocklist
+# ──────────────────────────────────────────────────
+# One pattern per line (case-insensitive grep -E regex).
+# Lines starting with # are comments. Blank lines are ignored.
+#
+# Any transcript line matching ANY pattern here is REMOVED entirely.
+#
+# Examples:
+#   John                     ← removes lines containing "John"
+#   \b\d{11}\b               ← removes lines with 11-digit phone numbers
+#   my\.email@example\.com   ← removes lines with this email
+#
+# ── Add your patterns below this line ──
+
+# Basic defaults: common PII patterns
+\b\d{11}\b
+\b\d{3}[-.\s]\d{4}[-.\s]\d{4}\b
+\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b

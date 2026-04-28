@@ -1,0 +1,11 @@
+[Unit]
+Description=Run HelloTalk Anki generation periodically
+
+[Timer]
+# Run 15 minutes after the analysis timer
+OnCalendar=*-*-* 00/6:45:00
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

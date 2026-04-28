@@ -1,0 +1,13 @@
+[Unit]
+Description=Process HelloTalk audio (denoise + split silence)
+After=hellotalk-pull-audio.service
+OnSuccess=hellotalk-transcribe.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/hellotalk-process-audio.sh
+Environment=HOME=%h
+TimeoutStartSec=7200
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Analyze HelloTalk transcripts with AI (merge + grammar/semantic analysis)
+After=hellotalk-cleanse.service
+# Decoupled from anki generation: anki is a manual, human-in-the-loop step.
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/hellotalk-analyze.sh
+Environment=HOME=%h
+EnvironmentFile=%h/.config/hellotalk/env
+TimeoutStartSec=7200
+
+[Install]
+WantedBy=default.target

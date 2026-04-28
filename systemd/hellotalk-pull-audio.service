@@ -1,0 +1,13 @@
+[Unit]
+Description=Pull HelloTalk captured audio from Android device
+Wants=network-online.target
+After=network-online.target
+OnSuccess=hellotalk-process-audio.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/hellotalk-pull-audio.sh
+Environment=HOME=%h
+
+[Install]
+WantedBy=default.target

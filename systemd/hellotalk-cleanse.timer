@@ -1,0 +1,13 @@
+[Unit]
+Description=Run HelloTalk transcript cleansing periodically
+
+[Timer]
+# Run every 6 hours
+OnCalendar=*-*-* 00/6:00:00
+# Also run 2 minutes after transcribe completes (if triggered manually)
+Persistent=true
+# Catch up if a run was missed while system was off
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target
