@@ -9,16 +9,17 @@ FAILED_DIR_FALLBACK="$HOME/.local/share/hellotalk/Failed_transcription"
 FAILED_DIR="$FAILED_DIR_PRIMARY"
 FAILED_DIR_ROOTS=("$FAILED_DIR_PRIMARY" "$FAILED_DIR_FALLBACK")
 LOG_TAG="hellotalk-transcribe"
-JUNK_MAX_BYTES=6
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [$LOG_TAG] $*"; }
 
-# Extract YYYY-MM-DD from filename like hellotalk_mic_20260323_...
-date_subdir() {
-    local name="$1"
-    local d="${name:14:8}"  # extract YYYYMMDD
-    echo "${d:0:4}-${d:4:2}-${d:6:2}"
-}
+# ── Load env file ──────────────────────────────────────────────────
+ENV_FILE="$HOME/.config/hellotalk/env"
+if [ -f "$ENV_FILE" ]; then
+    set -a && . "$ENV_FILE" && set +a
+fi
+
+# shellcheck source=/dev/null
+. "$HOME/.local/bin/hellotalk-common.sh"
 
 mkdir -p "$TRANSCRIBED_DIR" "$TRANSCRIPT_DIR"
 if ! mkdir -p "$FAILED_DIR_PRIMARY" 2>/dev/null; then
@@ -63,15 +64,6 @@ is_junk_text() {
     size="$(printf '%s' "$text" | wc -c)"
     compact="$(printf '%s' "$text" | tr -d '[:space:]')"
     [ "$size" -le "$JUNK_MAX_BYTES" ] || [ "$compact" = "." ] || [ -z "$compact" ]
-}
-
-is_junk_file() {
-    local file="$1"
-    local size
-    local content
-    size="$(wc -c < "$file")"
-    content="$(tr -d '[:space:]' < "$file")"
-    [ "$size" -le "$JUNK_MAX_BYTES" ] || [ "$content" = "." ] || [ -z "$content" ]
 }
 
 get_duration_sec() {

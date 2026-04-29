@@ -16,8 +16,8 @@ sanitize_analysis_input() {
     local src="$1"
     local dest="$2"
 
-    # Strip helper-added chunk headers so prompts see only analysis content.
-    awk '!/^--- Chunk [0-9]+[/][0-9]+ ---$/' "$src" > "$dest"
+    # Strip helper-added chunk headers and failure markers so prompts see only analysis content.
+    awk '!/^--- Chunk [0-9]+[/][0-9]+ ---$/ && !/\[ANALYSIS FAILED/' "$src" > "$dest"
 }
 
 mkdir -p "$ANKI_DIR"

@@ -7,26 +7,13 @@ CLEANED_DIR="$HOME/Android/HelloTalkCapture/Cleaned_Transcripts"
 TRANSCRIBED_DIR="$HOME/Android/HelloTalkCapture/Transcribed_audio"
 CONFIG_FILE="$HOME/.config/hellotalk/cleanse.conf"
 LOG_TAG="hellotalk-cleanse"
-JUNK_MAX_BYTES=6
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [$LOG_TAG] $*"; }
 
-# Extract YYYY-MM-DD from filename like hellotalk_mic_20260323_...
-date_subdir() {
-    local d="${1:14:8}"
-    echo "${d:0:4}-${d:4:2}-${d:6:2}"
-}
+# shellcheck source=/dev/null
+. "$HOME/.local/bin/hellotalk-common.sh"
 
 mkdir -p "$CLEANED_DIR"
-
-is_junk_file() {
-    local file="$1"
-    local size
-    local compact
-    size="$(wc -c < "$file")"
-    compact="$(tr -d '[:space:]' < "$file")"
-    [ "$size" -le "$JUNK_MAX_BYTES" ] || [ "$compact" = "." ] || [ -z "$compact" ]
-}
 
 delete_matching_audio() {
     local transcript_base="$1"

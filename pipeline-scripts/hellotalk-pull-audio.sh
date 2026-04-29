@@ -43,21 +43,34 @@ if [ "$WAV_COUNT" -gt 0 ]; then
 
     # Pull .wav files to local storage
     log "Pulling .wav files to $LOCAL_DIR..."
-    $ADB -s "$DEVICE" pull "$STAGING_DIR/." "$LOCAL_DIR/"
+    pull_rc=0
+    $ADB -s "$DEVICE" pull "$STAGING_DIR/." "$LOCAL_DIR/" || pull_rc=$?
 
-    # Clear staged .wav files to avoid re-pulling duplicates next run
-    log "Clearing staged .wav files from $STAGING_DIR..."
-    $ADB -s "$DEVICE" shell "su -c 'rm -f ${STAGING_DIR}/*.wav'"
+    if [ "$pull_rc" -eq 0 ]; then
+        # Verify local file count matches expected WAV_COUNT
+        local_wav_count=$(find "$LOCAL_DIR" -maxdepth 1 -name '*.wav' -newer "$LOCAL_DIR" -type f 2>/dev/null | wc -l || echo 0)
+        log "Pull succeeded. Local .wav files present: $local_wav_count (expected: $WAV_COUNT)."
 
-    # Delete .wav originals from device
-    log "Deleting .wav files from device..."
-    $ADB -s "$DEVICE" shell "su -c 'rm -f ${REMOTE_DIR}/*.wav'"
-fi
+        # Clear staged .wav files to avoid re-pulling duplicates next run
+        log "Clearing staged .wav files from $STAGING_DIR..."
+        $ADB -s "$DEVICE" shell "su -c 'rm -f ${STAGING_DIR}/*.wav'"
 
-# Delete .pcm files from device (not needed, .wav has same data with header)
-if [ "$PCM_COUNT" -gt 0 ]; then
-    log "Deleting .pcm files from device..."
-    $ADB -s "$DEVICE" shell "su -c 'rm -f ${REMOTE_DIR}/*.pcm'"
+        # Delete .wav originals from device
+        log "Deleting .wav files from device..."
+        $ADB -s "$DEVICE" shell "su -c 'rm -f ${REMOTE_DIR}/*.wav'"
+
+        # Delete .pcm files from device (not needed, .wav has same data with header)
+        if [ "$PCM_COUNT" -gt 0 ]; then
+            log "Deleting .pcm files from device..."
+            $ADB -s "$DEVICE" shell "su -c 'rm -f ${REMOTE_DIR}/*.pcm'"
+        fi
+    else
+        log "ERROR: adb pull failed (rc=$pull_rc). Keeping device originals for retry."
+        # Still clear staging to avoid partial duplicates on next run
+        log "Clearing staged .wav files from $STAGING_DIR..."
+        $ADB -s "$DEVICE" shell "su -c 'rm -f ${STAGING_DIR}/*.wav'"
+        exit 1
+    fi
 fi
 
 log "Done. Pulled $WAV_COUNT .wav files, deleted $PCM_COUNT .pcm files."

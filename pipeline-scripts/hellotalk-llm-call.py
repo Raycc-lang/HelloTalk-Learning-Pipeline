@@ -35,7 +35,6 @@ import sys, os, time, re, datetime, threading
 
 MAX_RETRIES = 3
 RETRY_DELAYS = [30, 60, 120]
-CALL_TIMEOUT = 480.0           # total per-call wall budget
 STREAM_IDLE_TIMEOUT = float(os.environ.get("STREAM_IDLE_TIMEOUT", "240"))
 CHUNK_THRESHOLD = 120000
 
@@ -269,6 +268,16 @@ def build_client():
     return client
 
 
+_cached_client = None
+
+
+def get_client():
+    global _cached_client
+    if _cached_client is None:
+        _cached_client = build_client()
+    return _cached_client
+
+
 def _extract_usage(chunk):
     """Pull a usage dict off a stream chunk if present (last chunk for some providers)."""
     u = getattr(chunk, "usage", None)
@@ -285,7 +294,7 @@ def _extract_usage(chunk):
 
 def call_api(system_prompt, input_chunk, return_usage=False):
     """Single streamed API call. Returns response text (and usage dict if requested)."""
-    client = build_client()
+    client = get_client()
 
     max_tokens_str = os.environ.get("MAX_TOKENS", "32768").strip()
     max_tokens = int(max_tokens_str) if max_tokens_str else 32768
@@ -302,7 +311,7 @@ def call_api(system_prompt, input_chunk, return_usage=False):
     }
 
     reasoning_effort = os.environ.get("REASONING_EFFORT", "high")
-    if reasoning_effort:
+    if reasoning_effort and reasoning_effort.strip():
         request["reasoning_effort"] = reasoning_effort
         request["extra_body"] = {"thinking": {"type": "enabled"}}
 

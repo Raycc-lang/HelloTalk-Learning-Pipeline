@@ -134,25 +134,30 @@ Language learners on HelloTalk produce a large volume of spontaneous, authentic 
    done
    ```
 
-2. Install Python dependencies:
+2. Copy LLM prompts to the expected location:
+   ```bash
+   cp prompts/*.md ~/Android/HelloTalkCapture/
+   ```
+
+3. Install Python dependencies:
    ```bash
    pip install openai httpx
    ```
 
-3. Copy and fill in the configuration template:
+4. Copy and fill in the configuration template:
    ```bash
    mkdir -p ~/.config/hellotalk
    cp config/env.template ~/.config/hellotalk/env
    # Edit ~/.config/hellotalk/env and add your API keys
    ```
 
-4. (Optional) Create a privacy blocklist:
+5. (Optional) Create a privacy blocklist:
    ```bash
    cp config/cleanse.conf.template ~/.config/hellotalk/cleanse.conf
    # Add regex patterns, one per line, to remove sensitive content from transcripts
    ```
 
-5. (Optional) Install systemd units for automation:
+6. (Optional) Install systemd units for automation:
    ```bash
    mkdir -p ~/.config/systemd/user
    cp systemd/*.service systemd/*.timer ~/.config/systemd/user/
@@ -191,6 +196,7 @@ All sensitive configuration lives in `~/.config/hellotalk/env`. The pipeline sup
 - `hellotalk-pull-audio.sh` — Edit `DEVICE=` to match your ADB target (e.g., `192.168.1.13:5555` for wireless).
 - `hellotalk-transcribe.sh` — Requires the NVIDIA gRPC Python client (`transcribe_file_offline.py` from NVIDIA's Riva samples). Update `PYTHON_CLIENT=` if your path differs.
 - `hellotalk-cleanse.sh` — Reads `~/.config/hellotalk/cleanse.conf` for PII blocklist patterns.
+- `hellotalk-analyze.sh` — Set `MERGE_MIN_LINES` (default: 80) to control the sparse-day consolidation threshold.
 
 ---
 
@@ -268,7 +274,10 @@ HelloTalk-Learning-Pipeline/
 │   ├── hellotalk-generate-anki.sh
 │   ├── hellotalk-llm-call.py
 │   ├── hellotalk-provider-resolve.sh
-│   └── hellotalk-quota-check.sh
+│   ├── hellotalk-quota-check.sh
+│   ├── hellotalk-cleanup-empty-segments.sh
+│   ├── hellotalk-reset-transcribe.sh
+│   └── hellotalk-common.sh
 ├── systemd/                  # User systemd units
 │   ├── *.service
 │   └── *.timer

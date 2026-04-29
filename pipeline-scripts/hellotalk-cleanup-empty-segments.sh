@@ -6,7 +6,6 @@ FAILED_DIR_PRIMARY="$HOME/Android/HelloTalkCapture/Failed_transcription"
 FAILED_DIR_FALLBACK="$HOME/.local/share/hellotalk/Failed_transcription"
 FAILED_DIRS=("$FAILED_DIR_PRIMARY" "$FAILED_DIR_FALLBACK")
 LOG_TAG="cleanup-empty-segments"
-JUNK_MAX_BYTES=6
 QUIET=false
 
 if [ "${1:-}" = "--quiet" ]; then
@@ -19,14 +18,8 @@ log() {
     fi
 }
 
-is_junk_file() {
-    local file="$1"
-    local size
-    local compact
-    size="$(wc -c < "$file")"
-    compact="$(tr -d '[:space:]' < "$file")"
-    [ "$size" -le "$JUNK_MAX_BYTES" ] || [ "$compact" = "." ] || [ -z "$compact" ]
-}
+# shellcheck source=/dev/null
+. "$HOME/.local/bin/hellotalk-common.sh"
 
 if [ ! -d "$TRANSCRIPT_DIR" ]; then
     log "Transcript directory not found: $TRANSCRIPT_DIR"
