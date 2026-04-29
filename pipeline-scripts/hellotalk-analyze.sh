@@ -6,6 +6,11 @@ CLEANED_DIR="$HOME/Android/HelloTalkCapture/Cleaned_Transcripts"
 ANALYSIS_DIR="$HOME/Android/HelloTalkCapture/Analysis"
 PROMPT_DIR="$HOME/Android/HelloTalkCapture"
 LOG_TAG="hellotalk-analyze"
+# ── Sparse-day consolidation config ─────────────────────────────────
+# If a day's merged.txt has fewer lines than this threshold, its content
+# is merged into the next day's analysis instead of getting its own run.
+: "${MERGE_MIN_LINES:=80}"
+
 
 # ── Prompt files ─────────────────────────────────────────────────────
 GRAMMAR_PROMPT="$PROMPT_DIR/Grammar_Analize_prompt.md"
@@ -100,6 +105,78 @@ done
 shopt -u nullglob
 
 log "Daily merge complete. $daily_merged day(s) updated."
+
+
+# ── Step 1.5: Consolidate sparse days ───────────────────────────────
+# Days with fewer than MERGE_MIN_LINES lines in merged.txt are merged
+# into the next day that has data, avoiding wasted API calls on thin content.
+log "Consolidating sparse days (threshold: $MERGE_MIN_LINES lines)..."
+
+shopt -s nullglob
+declare -a all_days=()
+for d in "$ANALYSIS_DIR"/????-??-??; do
+    [ -d "$d" ] && all_days+=("$(basename "$d")")
+done
+shopt -u nullglob
+
+# Sort chronologically
+IFS=$'\n' sorted_days=($(printf '%s\n' "${all_days[@]}" | sort)); unset IFS
+
+consolidated=0
+for i in "${!sorted_days[@]}"; do
+    day="${sorted_days[$i]}"
+    day_dir="$ANALYSIS_DIR/$day"
+    merged="$day_dir/merged.txt"
+
+    # Skip if directory was already removed by a prior consolidation
+    [ -d "$day_dir" ] || continue
+    [ -f "$merged" ] || continue
+
+    line_count=$(wc -l < "$merged")
+    if [ "$line_count" -lt "$MERGE_MIN_LINES" ]; then
+        # Find the next day that still exists (may have been consolidated too)
+        next_day=""
+        next_idx=$((i + 1))
+        while [ "$next_idx" -lt "${#sorted_days[@]}" ]; do
+            candidate="${sorted_days[$next_idx]}"
+            if [ -d "$ANALYSIS_DIR/$candidate" ]; then
+                next_day="$candidate"
+                break
+            fi
+            next_idx=$((next_idx + 1))
+        done
+
+        if [ -z "$next_day" ]; then
+            log "Sparse day $day ($line_count lines) — no next day to merge into, keeping as-is."
+            continue
+        fi
+
+        next_merged="$ANALYSIS_DIR/$next_day/merged.txt"
+
+        if [ -f "$next_merged" ]; then
+            # Prepend sparse day content with a date separator
+            tmpfile=$(mktemp)
+            {
+                echo "# ── Merged from $day ($line_count lines) ──"
+                cat "$merged"
+                echo ""
+                cat "$next_merged"
+            } > "$tmpfile"
+            mv "$tmpfile" "$next_merged"
+        else
+            # Next day has no merged.txt — move this one over
+            mkdir -p "$(dirname "$next_merged")"
+            mv "$merged" "$next_merged"
+        fi
+
+        # Remove the sparse day's analysis folder (only merged.txt + any analysis outputs)
+        rm -rf "$day_dir"
+        log "Consolidated $day ($line_count lines) -> $next_day"
+        ((consolidated++)) || true
+    fi
+done
+
+log "Consolidation complete. $consolidated sparse day(s) merged."
 
 # ── Step 2: Run AI analysis on each day's merged transcript ─────────
 log "Starting AI analysis..."

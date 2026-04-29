@@ -72,7 +72,7 @@ Language learners on HelloTalk produce a large volume of spontaneous, authentic 
 | **2. Process** | `hellotalk-process-audio.sh` | Denoises with `afftdn`, splits on silence boundaries, discards short/junk segments. |
 | **3. Transcribe** | `hellotalk-transcribe.sh` | Sends audio to NVIDIA Riva/Whisper gRPC API; retries on network failure; classifies errors. |
 | **4. Cleanse** | `hellotalk-cleanse.sh` | Removes filler words, ASR artifacts ("thank you for watching"), non-English lines, and PII matching a user-defined blocklist. |
-| **5. Analyze** | `hellotalk-analyze.sh` | Merges daily transcripts and runs two LLM prompts: **Grammar Analysis** and **Semantic/Collocational Analysis**. |
+| **5. Analyze** | `hellotalk-analyze.sh` | Merges daily transcripts, consolidates sparse days, and runs two LLM prompts: **Grammar Analysis** and **Semantic/Collocational Analysis**. |
 | **6. Generate Anki** | `hellotalk-generate-anki.sh` | Converts analysis output into tab-separated Anki card files (`.tsv`) ready for import. |
 
 ---
@@ -184,6 +184,7 @@ All sensitive configuration lives in `~/.config/hellotalk/env`. The pipeline sup
 | `TENCENT_API_KEY` | — | Tencent API key |
 | `CLOUDFLARE_API_TOKEN` | — | Cloudflare API token |
 | `CLOUDFLARE_ACCOUNT_ID` | — | Cloudflare account ID |
+| `MERGE_MIN_LINES` | `80` | Minimum lines for a day's `merged.txt` to stand alone; sparse days are consolidated into the next day |
 
 ### Script-Specific Notes
 
@@ -316,6 +317,7 @@ HelloTalk-Learning-Pipeline/
 
 ### Stage 5 — Analyze
 - Merges all cleansed transcripts for each calendar day into `Analysis/YYYY-MM-DD/merged.txt`
+- **Consolidates sparse days**: days with fewer than `MERGE_MIN_LINES` (default 80) lines are prepended into the next day's `merged.txt` with a date separator header, and the sparse day's folder is removed. This avoids wasting API calls on thin content. Cascade-safe: if absorbing a sparse day still leaves the target under threshold, it gets consolidated further in the same pass.
 - Runs two independent LLM analyses:
   - **Grammar** — identifies recurring grammatical errors and structural calques from L1 (Mandarin)
   - **Semantic** — identifies near-miss collocations, missed idioms, semantic boundary errors, register mismatches
