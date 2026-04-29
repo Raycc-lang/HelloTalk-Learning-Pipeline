@@ -170,13 +170,14 @@ Language learners on HelloTalk produce a large volume of spontaneous, authentic 
 
 ## Configuration
 
-All sensitive configuration lives in `~/.config/hellotalk/env`. The pipeline supports three LLM providers:
+All sensitive configuration lives in `~/.config/hellotalk/env`. The pipeline supports four LLM providers:
 
 | Provider | `PROVIDER=` | Required Vars |
 |----------|-------------|---------------|
 | NVIDIA NIM | `nvidia` | `NVIDIA_API_KEY` |
 | Tencent MaaS | `tencent` | `TENCENT_API_KEY` |
 | Cloudflare Workers AI | `cloudflare` | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` |
+| MIMO (Xiaomi) | `mimo` | `MIMO_API_KEY` |
 
 ### Environment Variables
 

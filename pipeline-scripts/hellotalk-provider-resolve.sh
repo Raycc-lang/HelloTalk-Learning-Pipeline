@@ -19,8 +19,12 @@ case "$PROVIDER" in
         : "${API_BASE:=https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID:-}/ai/v1}"
         : "${API_KEY:=${CLOUDFLARE_API_TOKEN:-}}"
         ;;
+    mimo)
+        : "${API_BASE:=${MIMO_API_BASE:-https://token-plan-sgp.xiaomimimo.com/v1}}"
+        : "${API_KEY:=${MIMO_API_KEY:-}}"
+        ;;
     *)
-        echo "ERROR: unknown PROVIDER='$PROVIDER' (valid: nvidia|tencent|cloudflare)" >&2
+        echo "ERROR: unknown PROVIDER='$PROVIDER' (valid: nvidia|tencent|cloudflare|mimo)" >&2
         return 1 2>/dev/null || exit 1
         ;;
 esac
