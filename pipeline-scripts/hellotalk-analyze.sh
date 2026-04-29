@@ -13,8 +13,8 @@ LOG_TAG="hellotalk-analyze"
 
 
 # ── Prompt files ─────────────────────────────────────────────────────
-GRAMMAR_PROMPT="$PROMPT_DIR/Grammar_Analize_prompt.md"
-SEMANTIC_PROMPT="$PROMPT_DIR/Semantic_Collocational_Analysis.md"
+GRAMMAR_PROMPT="$PROMPT_DIR/analysis-grammar.md"
+SEMANTIC_PROMPT="$PROMPT_DIR/analysis-semantic.md"
 
 # ── Model config ─────────────────────────────────────────────────────
 # Resolve API_BASE / API_KEY from PROVIDER (nvidia|tencent|cloudflare).

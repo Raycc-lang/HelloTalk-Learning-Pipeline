@@ -273,10 +273,10 @@ HelloTalk-Learning-Pipeline/
 │   ├── *.service
 │   └── *.timer
 ├── prompts/                  # LLM system prompts
-│   ├── Grammar_Analize_prompt.md
-│   ├── Semantic_Collocational_Analysis.md
-│   ├── Anki_cards_generating_prompt_Grammar.md
-│   └── Anki_cards_generating_prompt_Chunks.md
+│   ├── analysis-grammar.md
+│   ├── analysis-semantic.md
+│   ├── anki-generator-grammar.md
+│   └── anki-generator-semantic.md
 ├── config/                   # Configuration templates
 │   ├── env.template
 │   └── cleanse.conf.template
