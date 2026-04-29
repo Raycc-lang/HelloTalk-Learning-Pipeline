@@ -244,8 +244,6 @@ def api_key_for_base(base_url):
         return os.environ.get("TENCENT_API_KEY", "")
     if "cloudflare.com" in base_url:
         return os.environ.get("CLOUDFLARE_API_TOKEN", "")
-    if "xiaomimimo.com" in base_url:
-        return os.environ.get("MIMO_API_KEY", "")
     return os.environ.get("NVIDIA_API_KEY", os.environ.get("CLOUDFLARE_API_TOKEN", ""))
 
 
