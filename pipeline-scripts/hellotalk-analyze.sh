@@ -37,7 +37,7 @@ fi
 . "$HOME/.local/bin/hellotalk-quota-check.sh"
 hellotalk_quota_check
 
-log "Provider: $PROVIDER  Model: $MODEL  API: $API_BASE"
+log "Provider: $PROVIDER  Model: $MODEL  Reasoning: ${REASONING_EFFORT}  API: $API_BASE"
 
 # ── Collect prompt files that exist and are non-empty ────────────────
 declare -A PROMPTS
@@ -70,6 +70,12 @@ for date_dir in "$CLEANED_DIR"/????-??-??; do
     day_analysis="$ANALYSIS_DIR/$day"
     mkdir -p "$day_analysis"
     merged="$day_analysis/merged.txt"
+
+    # Skip if source was already consolidated into a later day
+    src_dir="$(dirname "${individual[0]}")"
+    if [ -d "${src_dir}.consolidated" ]; then
+        continue
+    fi
 
     # Find the newest individual transcript
     newest_src=0
@@ -171,6 +177,11 @@ for i in "${!sorted_days[@]}"; do
 
         # Remove the sparse day's analysis folder (only merged.txt + any analysis outputs)
         rm -rf "$day_dir"
+        # Mark source directory as consolidated to prevent re-merging
+        src_dir="$CLEANED_DIR/$day"
+        if [ -d "$src_dir" ]; then
+            mv "$src_dir" "${src_dir}.consolidated"
+        fi
         log "Consolidated $day ($line_count lines) -> $next_day"
         ((consolidated++)) || true
     fi

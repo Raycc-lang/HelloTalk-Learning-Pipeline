@@ -8,6 +8,8 @@ GRAMMAR_PROMPT="${GRAMMAR_PROMPT:-$PROMPT_DIR/anki-generator-grammar.md}"
 CHUNKS_PROMPT="${CHUNKS_PROMPT:-$PROMPT_DIR/anki-generator-semantic.md}"
 LLM_CALL="${LLM_CALL:-$HOME/.local/bin/hellotalk-llm-call.py}"
 HARD_TIMEOUT="${HARD_TIMEOUT:-2400}"
+TSV_RETRY_COUNT="${TSV_RETRY_COUNT:-1}"
+EXPECTED_TABS="${EXPECTED_TABS:-5}"   # 6 fields = 5 tab separators; accept lines with >= this many
 LOG_TAG="hellotalk-generate-anki"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [$LOG_TAG] $*"; }
@@ -18,6 +20,35 @@ sanitize_analysis_input() {
 
     # Strip helper-added chunk headers and failure markers so prompts see only analysis content.
     awk '!/^--- Chunk [0-9]+[/][0-9]+ ---$/ && !/\[ANALYSIS FAILED/' "$src" > "$dest"
+}
+
+# Validate TSV output: keep only lines with >= EXPECTED_TABS tabs.
+# Returns the number of valid lines written to $2. Rejects blank lines,
+# LLM commentary (0 tabs), and truncated/malformed lines (<5 tabs).
+validate_and_filter_tsv() {
+    local src="$1"
+    local dest="$2"
+    local tabs="$3"
+    local valid=0
+    local rejected=0
+
+    : > "$dest"
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Skip empty/blank lines
+        [ -z "${line//[$' \t']/}" ] && continue
+        count=$(printf '%s' "$line" | tr -cd '\t' | wc -c)
+        if [ "$count" -ge "$tabs" ]; then
+            printf '%s\n' "$line" >> "$dest"
+            ((valid++)) || true
+        else
+            ((rejected++)) || true
+        fi
+    done < "$src"
+
+    if [ "$rejected" -gt 0 ]; then
+        log "  TSV filter: $valid valid, $rejected rejected (< $tabs tabs)"
+    fi
+    echo "$valid"
 }
 
 mkdir -p "$ANKI_DIR"
@@ -77,55 +108,95 @@ for day_dir in "$ANALYSIS_DIR"/????-??-??; do
 
         tmpinput=$(mktemp)
         tmpout=$(mktemp)
+        tmpvalidated=$(mktemp)
+        tmpstrictprompt=$(mktemp)
         sanitize_analysis_input "$input_file" "$tmpinput"
 
         if [ ! -s "$tmpinput" ]; then
-            rm -f "$tmpinput" "$tmpout"
+            rm -f "$tmpinput" "$tmpout" "$tmpvalidated" "$tmpstrictprompt"
             log "WARNING: $day/$output_name — sanitized input is empty."
             ((failed++)) || true
             continue
         fi
 
-        rc=0
-        timeout "$HARD_TIMEOUT" env LLM_CHUNK_HEADERS=0 python3 "$LLM_CALL" \
-            "$prompt_file" "$tmpinput" "$tmpout" || rc=$?
-
-        if [ $rc -eq 0 ]; then
-            if [ -s "$tmpout" ]; then
-                mv "$tmpout" "$output_file"
-                log "Done: $day/$output_name -> $(wc -l < "$output_file") line(s)"
-                ((generated++)) || true
+        attempt=0
+        max_attempts=$(( TSV_RETRY_COUNT + 1 ))
+        while [ $attempt -lt $max_attempts ]; do
+            rc=0
+            if [ $attempt -eq 0 ]; then
+                current_prompt="$prompt_file"
             else
-                rm -f "$tmpout"
-                log "WARNING: $day/$output_name — empty response after retries."
-                ((failed++)) || true
+                # Build a stricter prompt for retry: original + enforcement suffix
+                cat "$prompt_file" > "$tmpstrictprompt"
+                cat >> "$tmpstrictprompt" <<'RETRY_SUFFIX'
+
+━━━ CRITICAL FORMAT REMINDER ━━━
+Your ENTIRE response must be raw TSV data only.
+- One card per line. Exactly 6 tab-separated fields per line (5 tab characters).
+- NO explanatory text, NO commentary, NO planning notes, NO markdown fences.
+- NO blank lines. NO headers. NO code fences.
+- Every non-empty line MUST contain exactly 5 tab characters.
+- If you write anything other than tab-separated card data, the output will be rejected.
+RETRY_SUFFIX
+                current_prompt="$tmpstrictprompt"
+                log "  Retry $attempt/$TSV_RETRY_COUNT for $day/$output_name (stricter prompt)..."
             fi
-        else
-            rm -f "$tmpout"
-            case $rc in
-                2)
-                    rm -f "$tmpinput"
-                    log "QUOTA HIT on $day/$output_name — sentinel written, aborting batch."
-                    log "Anki generation aborted. Generated: $generated, Skipped: $skipped, Failed: $failed (before quota)."
-                    exit 75
-                    ;;
-                3)
-                    rm -f "$tmpinput"
-                    log "FATAL API error on $day/$output_name — aborting batch."
-                    exit 1
-                    ;;
-                124)
-                    log "ERROR: $day/$output_name — timed out (${HARD_TIMEOUT}s hard limit)."
-                    ((failed++)) || true
-                    ;;
-                *)
-                    log "ERROR: $day/$output_name — failed (rc=$rc)."
-                    ((failed++)) || true
-                    ;;
-            esac
+
+            timeout "$HARD_TIMEOUT" env LLM_CHUNK_HEADERS=0 python3 "$LLM_CALL" \
+                "$current_prompt" "$tmpinput" "$tmpout" || rc=$?
+
+            if [ $rc -eq 0 ] && [ -s "$tmpout" ]; then
+                # Validate and filter TSV output
+                valid_lines=$(validate_and_filter_tsv "$tmpout" "$tmpvalidated" "$EXPECTED_TABS")
+
+                if [ "$valid_lines" -gt 0 ]; then
+                    mv "$tmpvalidated" "$output_file"
+                    log "Done: $day/$output_name -> $valid_lines valid line(s)"
+                    ((generated++)) || true
+                    break
+                else
+                    log "  WARNING: $day/$output_name — all lines rejected by TSV filter (attempt $((attempt+1))/$max_attempts)."
+                    rm -f "$tmpout"
+                fi
+            elif [ $rc -ne 0 ]; then
+                rm -f "$tmpout"
+                case $rc in
+                    2)
+                        rm -f "$tmpinput" "$tmpvalidated" "$tmpstrictprompt"
+                        log "QUOTA HIT on $day/$output_name — sentinel written, aborting batch."
+                        log "Anki generation aborted. Generated: $generated, Skipped: $skipped, Failed: $failed (before quota)."
+                        exit 75
+                        ;;
+                    3)
+                        rm -f "$tmpinput" "$tmpvalidated" "$tmpstrictprompt"
+                        log "FATAL API error on $day/$output_name — aborting batch."
+                        exit 1
+                        ;;
+                    124)
+                        log "ERROR: $day/$output_name — timed out (${HARD_TIMEOUT}s hard limit)."
+                        break  # don't retry on timeout
+                        ;;
+                    *)
+                        log "ERROR: $day/$output_name — failed (rc=$rc)."
+                        break  # don't retry on other errors
+                        ;;
+                esac
+            else
+                # rc=0 but empty output
+                rm -f "$tmpout"
+                log "  WARNING: $day/$output_name — empty response (attempt $((attempt+1))/$max_attempts)."
+            fi
+
+            ((attempt++)) || true
+        done
+
+        # If we exhausted all attempts without success
+        if [ $attempt -eq $max_attempts ] && [ ! -f "$output_file" ]; then
+            log "ERROR: $day/$output_name — failed after $max_attempts attempt(s)."
+            ((failed++)) || true
         fi
 
-        rm -f "$tmpinput"
+        rm -f "$tmpinput" "$tmpout" "$tmpvalidated" "$tmpstrictprompt"
     done
 done
 shopt -u nullglob

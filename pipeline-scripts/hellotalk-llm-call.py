@@ -152,8 +152,16 @@ def classify_error(exc):
     if status == 403 and re.search(r"quota|balance|credit|billing", body, re.IGNORECASE):
         return "quota_daily", body.strip()[:300]
     if status == 429:
-        # Generic rate limit if no daily wording matched above
-        return "quota_rate", body.strip()[:300]
+        # Distinguish daily quota exhaustion (abort) from RPM rate-limit (retry)
+        if DAILY_RE.search(body):
+            return "quota_daily", body.strip()[:300]
+        # Extract Retry-After from response headers if available
+        retry_after = ""
+        if resp is not None:
+            ra = getattr(resp, "headers", {}).get("retry-after", "")
+            if ra:
+                retry_after = f" [retry-after={ra}s]"
+        return "rate_limit", body.strip()[:300] + retry_after
     if status in (400, 401, 404, 422):
         return "fatal", f"HTTP {status}: {body.strip()[:300]}"
     if status and 500 <= status < 600:
@@ -244,6 +252,8 @@ def api_key_for_base(base_url):
         return os.environ.get("TENCENT_API_KEY", "")
     if "cloudflare.com" in base_url:
         return os.environ.get("CLOUDFLARE_API_TOKEN", "")
+    if "googleapis.com" in base_url:
+        return os.environ.get("GOOGLE_API_KEY", "")
     return os.environ.get("NVIDIA_API_KEY", os.environ.get("CLOUDFLARE_API_TOKEN", ""))
 
 
@@ -311,9 +321,14 @@ def call_api(system_prompt, input_chunk, return_usage=False):
     }
 
     reasoning_effort = os.environ.get("REASONING_EFFORT", "high")
+    provider = os.environ.get("PROVIDER", "")
     if reasoning_effort and reasoning_effort.strip():
         request["reasoning_effort"] = reasoning_effort
-        request["extra_body"] = {"thinking": {"type": "enabled"}}
+        # Google's OpenAI-compat endpoint maps reasoning_effort natively
+        # to thinking_level/thinking_budget — no extra_body needed.
+        # Kimi/NVIDIA need the extra_body to enable thinking.
+        if provider != "google":
+            request["extra_body"] = {"thinking": {"type": "enabled"}}
 
     completion = client.chat.completions.create(**request)
 
@@ -359,36 +374,66 @@ def call_api(system_prompt, input_chunk, return_usage=False):
     return result
 
 
+def _parse_retry_after(detail):
+    """Extract retry-after seconds from error detail string."""
+    m = re.search(r"\[retry-after=(\d+)s\]", detail)
+    return int(m.group(1)) if m else 0
+
+
+# Rate-limit retries use longer, separate backoff schedule
+RATE_LIMIT_MAX_RETRIES = 8
+RATE_LIMIT_BASE_DELAY = 60  # seconds; overridden by Retry-After if present
+
+
 def call_with_retry(system_prompt, input_chunk, chunk_label=""):
     """Returns response text or None. Raises QuotaExceeded / FatalAPIError on those classes."""
     label = f" ({chunk_label})" if chunk_label else ""
     last_err = None
+    transient_attempts = 0
+    rate_limit_attempts = 0
 
-    for i in range(MAX_RETRIES):
+    while True:
         try:
             result = call_api(system_prompt, input_chunk)
             if result.strip():
                 return result
             last_err = "empty response"
-            log(f"[attempt {i+1}/{MAX_RETRIES}{label}: empty response]")
+            transient_attempts += 1
+            log(f"[attempt {transient_attempts}/{MAX_RETRIES}{label}: empty response]")
+            if transient_attempts >= MAX_RETRIES:
+                break
+            delay = RETRY_DELAYS[transient_attempts - 1]
+            log(f"[retrying in {delay}s...]")
+            time.sleep(delay)
         except Exception as e:
             kind, detail = classify_error(e)
-            if kind == "quota_daily" or kind == "quota_rate":
+            if kind == "quota_daily":
                 log(f"[QUOTA{label}: {kind} — {detail}]")
-                raise QuotaExceeded("daily" if kind == "quota_daily" else "rate", detail)
+                raise QuotaExceeded("daily", detail)
+            if kind == "rate_limit":
+                rate_limit_attempts += 1
+                ra = _parse_retry_after(detail)
+                delay = max(ra, RATE_LIMIT_BASE_DELAY)
+                log(f"[RATE LIMIT{label}: attempt {rate_limit_attempts}/{RATE_LIMIT_MAX_RETRIES} — waiting {delay}s]")
+                if rate_limit_attempts >= RATE_LIMIT_MAX_RETRIES:
+                    log(f"[RATE LIMIT{label}: exhausted {RATE_LIMIT_MAX_RETRIES} retries]")
+                    raise QuotaExceeded("rate", detail)
+                time.sleep(delay)
+                continue
             if kind == "fatal":
                 log(f"[FATAL{label}: {detail}]")
                 raise FatalAPIError(detail)
             # transient
+            transient_attempts += 1
             last_err = detail
-            log(f"[attempt {i+1}/{MAX_RETRIES}{label} transient: {detail}]")
-
-        if i < MAX_RETRIES - 1:
-            delay = RETRY_DELAYS[i]
+            log(f"[attempt {transient_attempts}/{MAX_RETRIES}{label} transient: {detail}]")
+            if transient_attempts >= MAX_RETRIES:
+                break
+            delay = RETRY_DELAYS[transient_attempts - 1]
             log(f"[retrying in {delay}s...]")
             time.sleep(delay)
 
-    log(f"[all {MAX_RETRIES} attempts failed{label}: {last_err}]")
+    log(f"[all {transient_attempts} transient attempts failed{label}: {last_err}]")
     return None
 
 
