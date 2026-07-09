@@ -248,13 +248,9 @@ def api_key_for_base(base_url):
         return explicit_key
     if "nvidia.com" in base_url:
         return os.environ.get("NVIDIA_API_KEY", "")
-    if "tencentmaas.com" in base_url or "tencent.com" in base_url:
-        return os.environ.get("TENCENT_API_KEY", "")
-    if "cloudflare.com" in base_url:
-        return os.environ.get("CLOUDFLARE_API_TOKEN", "")
     if "googleapis.com" in base_url:
         return os.environ.get("GOOGLE_API_KEY", "")
-    return os.environ.get("NVIDIA_API_KEY", os.environ.get("CLOUDFLARE_API_TOKEN", ""))
+    return os.environ.get("NVIDIA_API_KEY", "")
 
 
 def build_client():
@@ -310,7 +306,7 @@ def call_api(system_prompt, input_chunk, return_usage=False):
     max_tokens = int(max_tokens_str) if max_tokens_str else 32768
 
     request = {
-        "model": os.environ.get("MODEL", "moonshotai/kimi-k2.5"),
+        "model": os.environ.get("MODEL", "gemini-3.5-flash"),
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": input_chunk},

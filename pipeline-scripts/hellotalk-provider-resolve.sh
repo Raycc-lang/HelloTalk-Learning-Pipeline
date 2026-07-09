@@ -1,34 +1,26 @@
 #!/usr/bin/env bash
 # Resolve API_BASE and API_KEY from PROVIDER selection.
 # Source this file (do not execute) after loading the env file.
-# Inputs:  $PROVIDER  (nvidia|tencent|cloudflare; default: nvidia)
+# Inputs:  $PROVIDER  (google|nvidia|custom; default: google)
 # Outputs: exports API_BASE and API_KEY (only if not already set in env).
 
-: "${PROVIDER:=nvidia}"
+: "${PROVIDER:=google}"
 
 case "$PROVIDER" in
-    nvidia)
-        : "${API_BASE:=${NVIDIA_API_BASE:-https://integrate.api.nvidia.com/v1}}"
-        : "${API_KEY:=${NVIDIA_API_KEY:-}}"
-        ;;
-    tencent)
-        : "${API_BASE:=${TENCENT_API_BASE:-https://tokenhub.tencentmaas.com/v1}}"
-        : "${API_KEY:=${TENCENT_API_KEY:-}}"
-        ;;
-    cloudflare)
-        : "${API_BASE:=https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID:-}/ai/v1}"
-        : "${API_KEY:=${CLOUDFLARE_API_TOKEN:-}}"
-        ;;
-    mimo)
-        : "${API_BASE:=${MIMO_API_BASE:-https://token-plan-sgp.xiaomimimo.com/v1}}"
-        : "${API_KEY:=${MIMO_API_KEY:-}}"
-        ;;
     google)
         : "${API_BASE:=${GOOGLE_API_BASE:-https://generativelanguage.googleapis.com/v1beta/openai}}"
         : "${API_KEY:=${GOOGLE_API_KEY:-}}"
         ;;
+    nvidia)
+        : "${API_BASE:=${NVIDIA_API_BASE:-https://integrate.api.nvidia.com/v1}}"
+        : "${API_KEY:=${NVIDIA_API_KEY:-}}"
+        ;;
+    custom)
+        : "${API_BASE:=${CUSTOM_API_BASE:-}}"
+        : "${API_KEY:=${CUSTOM_API_KEY:-}}"
+        ;;
     *)
-        echo "ERROR: unknown PROVIDER='$PROVIDER' (valid: nvidia|tencent|cloudflare|mimo|google)" >&2
+        echo "ERROR: unknown PROVIDER='$PROVIDER' (valid: google|nvidia|custom)" >&2
         return 1 2>/dev/null || exit 1
         ;;
 esac

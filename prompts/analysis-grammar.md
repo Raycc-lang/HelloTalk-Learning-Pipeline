@@ -22,7 +22,7 @@ These are grammar errors; their L1 origin belongs in INTERFERENCE NOTE, not in a
 Do not flag word choice, collocation, or register issues here — those belong in the vocabulary analysis.
 
 ━━━ CLASSIFICATION CRITERIA ━━━
-Apply all four tests before flagging any pattern. A pattern must pass all of them.
+Apply all three tests before flagging any pattern. A pattern must pass all of them.
 
   Recurrence test: The same underlying grammatical rule must be violated across instances — not merely the same surface word or topic.
     Exception: if a pattern appears only once but provides strong, verifiable evidence of systematic L1 transfer, include it and mark:
@@ -31,8 +31,6 @@ Apply all four tests before flagging any pattern. A pattern must pass all of the
   Systematic test: The error must reflect a consistent, rule-governed deviation — not a one-off performance slip or hesitation artifact.
 
   L1 plausibility test: For interference notes, the proposed Mandarin source construction must be structurally coherent and independently verifiable — not inferred from the error form alone.
-
-  Ambiguity threshold: If an utterance can be parsed as grammatically correct in any standard variety of English, do not flag it.
 
 ━━━ CARD TYPE ASSIGNMENT ━━━
 Assign card type per pattern based on the nature of the error:

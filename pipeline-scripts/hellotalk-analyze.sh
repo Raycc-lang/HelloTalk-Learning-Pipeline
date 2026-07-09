@@ -17,10 +17,10 @@ GRAMMAR_PROMPT="$PROMPT_DIR/analysis-grammar.md"
 SEMANTIC_PROMPT="$PROMPT_DIR/analysis-semantic.md"
 
 # ── Model config ─────────────────────────────────────────────────────
-# Resolve API_BASE / API_KEY from PROVIDER (nvidia|tencent|cloudflare).
+# Resolve API_BASE / API_KEY from PROVIDER (google|nvidia|custom).
 # shellcheck source=/dev/null
 . "$HOME/.local/bin/hellotalk-provider-resolve.sh"
-: "${MODEL:=moonshotai/kimi-k2.5}"
+: "${MODEL:=gemini-3.5-flash}"
 : "${MAX_TOKENS:=131072}"
 export API_BASE API_KEY MODEL MAX_TOKENS PROVIDER
 

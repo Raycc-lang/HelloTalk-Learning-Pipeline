@@ -53,7 +53,7 @@ validate_and_filter_tsv() {
 
 mkdir -p "$ANKI_DIR"
 
-# Resolve API_BASE / API_KEY from PROVIDER (nvidia|tencent|cloudflare).
+# Resolve API_BASE / API_KEY from PROVIDER (google|nvidia|custom).
 # shellcheck source=/dev/null
 . "$HOME/.local/bin/hellotalk-provider-resolve.sh"
 export API_BASE API_KEY MODEL MAX_TOKENS PROVIDER

@@ -53,6 +53,23 @@ for wav in "${wav_files[@]}"; do
         continue
     fi
 
+    # Quarantine oversized files (>200MB) — likely stuck recordings or very long sessions.
+    # A 200MB WAV at stereo 48kHz 16-bit is ~18 minutes, which is already very long.
+    file_size=$(stat -c%s "$wav" 2>/dev/null || echo 0)
+    max_size=$((200 * 1024 * 1024))  # 200MB
+    if [ "$file_size" -gt "$max_size" ]; then
+        quarantine_target="$INVALID_DIR/$(basename "$wav")"
+        if [ -e "$quarantine_target" ]; then
+            quarantine_target="$INVALID_DIR/${base}_$(date +%s).wav"
+        fi
+        mv "$wav" "$quarantine_target"
+        rm -rf "$tmp_dir"
+        size_mb=$((file_size / 1024 / 1024))
+        log "  Quarantined oversized file (${size_mb}MB) -> $(basename "$quarantine_target")"
+        ((quarantined++)) || true
+        continue
+    fi
+
     # Quarantine malformed audio files instead of aborting the full batch.
     if ! ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$wav" >/dev/null 2>&1; then
         quarantine_target="$INVALID_DIR/$(basename "$wav")"

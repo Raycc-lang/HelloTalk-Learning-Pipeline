@@ -1,6 +1,6 @@
 # HelloTalk Learning Pipeline
 
-An automated 6-stage pipeline that extracts voice messages from the HelloTalk language-exchange app, transcribes them with Whisper, analyzes grammar and vocabulary with LLMs, and generates Anki flashcards for targeted language learning.
+An automated 7-stage pipeline that extracts voice messages from the HelloTalk language-exchange app, transcribes them with Whisper, analyzes grammar and vocabulary with LLMs, builds timed 4/3/2 fluency drills, and generates Anki flashcards for targeted language learning.
 
 Built for intermediate ESL learners whose L1 is Mandarin Chinese, but adaptable to any language pair.
 
@@ -36,7 +36,7 @@ Language learners on HelloTalk produce a large volume of spontaneous, authentic 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                         HELLOTALK LEARNING PIPELINE                         │
-│                              (6-Stage Pipeline)                             │
+│                              (7-Stage Pipeline)                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 
  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
@@ -55,6 +55,18 @@ Language learners on HelloTalk produce a large volume of spontaneous, authentic 
                                                                    ▼
                                                               ┌──────────┐
                                                               │  Stage 6 │
+                                                              │  4/3/2   │
+                                                              │  DRILL   │
+                                                              └──────────┘
+                                                                   │
+                                                                   ▼
+                                                              grammar-drill.md
+                                                              vocabulary-drill.md
+                                                              (timed retell)
+                                                                   │
+                                                                   ▼
+                                                              ┌──────────┐
+                                                              │  Stage 7 │
                                                               │   ANKI   │
                                                               └──────────┘
                                                                    │
@@ -73,7 +85,8 @@ Language learners on HelloTalk produce a large volume of spontaneous, authentic 
 | **3. Transcribe** | `hellotalk-transcribe.sh` | Sends audio to NVIDIA Riva/Whisper gRPC API; retries on network failure; classifies errors. |
 | **4. Cleanse** | `hellotalk-cleanse.sh` | Removes filler words, ASR artifacts ("thank you for watching"), non-English lines, and PII matching a user-defined blocklist. |
 | **5. Analyze** | `hellotalk-analyze.sh` | Merges daily transcripts, consolidates sparse days, and runs two LLM prompts: **Grammar Analysis** and **Semantic/Collocational Analysis**. |
-| **6. Generate Anki** | `hellotalk-generate-anki.sh` | Converts analysis output into tab-separated Anki card files (`.tsv`) ready for import. |
+| **6. 4/3/2 Drill** | `hellotalk-generate-drill-interactive.sh` | Builds timed 4/3/2 fluency drills (retell the same content at 4→3→2 min) from the day's grammar/semantic analysis + transcript context. Interactive-only; no systemd unit. |
+| **7. Generate Anki** | `hellotalk-generate-anki.sh` | Converts analysis output into tab-separated Anki card files (`.tsv`) ready for import. |
 
 ---
 
@@ -88,7 +101,7 @@ Language learners on HelloTalk produce a large volume of spontaneous, authentic 
 - `bash`, `adb`, `ffmpeg`, `ffprobe`, `bc`
 - Python 3.10+ with `openai` and `httpx` packages
 - `systemd` (for automated timers; optional — everything works manually)
-- NVIDIA API key (or Tencent / Cloudflare alternative) for transcription and LLM inference
+- A Google AI Studio API key (default LLM provider) — or an NVIDIA key, or any OpenAI-compatible endpoint — for LLM inference; an NVIDIA API key for transcription
 
 ### Optional
 - [Anki](https://apps.ankiweb.net/) desktop or mobile for card import
@@ -137,6 +150,8 @@ Language learners on HelloTalk produce a large volume of spontaneous, authentic 
 2. Copy LLM prompts to the expected location:
    ```bash
    cp prompts/*.md ~/Android/HelloTalkCapture/
+   mkdir -p ~/Android/HelloTalkCapture/Drill
+   cp prompts/drill/*.md ~/Android/HelloTalkCapture/Drill/
    ```
 
 3. Install Python dependencies:
@@ -174,22 +189,24 @@ All sensitive configuration lives in `~/.config/hellotalk/env`. The pipeline sup
 
 | Provider | `PROVIDER=` | Required Vars |
 |----------|-------------|---------------|
+| Google AI Studio (default) | `google` | `GOOGLE_API_KEY` |
 | NVIDIA NIM | `nvidia` | `NVIDIA_API_KEY` |
-| Tencent MaaS | `tencent` | `TENCENT_API_KEY` |
-| Cloudflare Workers AI | `cloudflare` | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` |
+| Custom (any OpenAI-compatible endpoint) | `custom` | `CUSTOM_API_BASE`, `CUSTOM_API_KEY` |
 
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PROVIDER` | `nvidia` | Which backend to use for LLM calls |
-| `MODEL` | `moonshotai/kimi-k2.5` | Model ID (provider-specific) |
-| `MAX_TOKENS` | `131072` | Max tokens per LLM response |
+| `PROVIDER` | `google` | Which backend to use for LLM calls (`google`, `nvidia`, or `custom`) |
+| `MODEL` | `gemini-3.5-flash` | Model ID (provider-specific) |
+| `REASONING_EFFORT` | `high` | Thinking effort: `minimal` \| `low` \| `medium` \| `high`. Mapped to a thinking budget on Google's OpenAI-compatible endpoint |
+| `GOOGLE_API_KEY` | — | Google AI Studio API key |
 | `NVIDIA_API_KEY` | — | NVIDIA API key |
-| `TENCENT_API_KEY` | — | Tencent API key |
-| `CLOUDFLARE_API_TOKEN` | — | Cloudflare API token |
-| `CLOUDFLARE_ACCOUNT_ID` | — | Cloudflare account ID |
+| `CUSTOM_API_BASE` | — | Base URL for a custom OpenAI-compatible endpoint |
+| `CUSTOM_API_KEY` | — | API key for the custom endpoint |
 | `MERGE_MIN_LINES` | `80` | Minimum lines for a day's `merged.txt` to stand alone; sparse days are consolidated into the next day |
+
+> **Note on `MAX_TOKENS`:** it is no longer set globally. Thinking models spend the same token budget on internal reasoning, so a small cap can yield zero visible output. Each script supplies its own default instead (`131072` for analyze/drill, with a `32768` fallback inside `hellotalk-llm-call.py`).
 
 ### Script-Specific Notes
 
@@ -222,11 +239,19 @@ hellotalk-cleanse.sh
 # 5. Run AI analysis (grammar + semantic)
 hellotalk-analyze.sh
 
-# 6. Generate Anki TSVs
+# 6. Build 4/3/2 fluency drills (interactive picker — recommended)
+hellotalk-generate-drill-interactive.sh
+# (batch variant: hellotalk-generate-drill.sh)
+
+# 7. Generate Anki TSVs
 hellotalk-generate-anki.sh
 ```
 
-After Stage 6, import the generated `.tsv` files into Anki:
+After Stage 6, the drill sessions land in `Drill/sessions/YYYY-MM-DD/` as
+`grammar-drill.md` and `vocabulary-drill.md` — a content skeleton to talk from, not a
+script to read. Read it once, then do the 4→3→2 min timed retellings.
+
+After Stage 7, import the generated `.tsv` files into Anki:
 - `Anki/YYYY-MM-DD/grammar_cards.tsv`
 - `Anki/YYYY-MM-DD/chunk_cards.tsv`
 
@@ -240,8 +265,10 @@ The included systemd timers run the pipeline on a schedule:
 | `hellotalk-process-audio.timer` | Daily at 12:05 | → transcribe |
 | `hellotalk-transcribe.timer` | Daily at 12:15 | → cleanse |
 | `hellotalk-cleanse.timer` | Every 6 hours | → analyze |
-| `hellotalk-analyze.timer` | Every 6 hours (offset) | (manual Anki) |
+| `hellotalk-analyze.timer` | Every 6 hours (offset) | (manual drill / Anki) |
 | `hellotalk-generate-anki.timer` | Every 6 hours (offset) | — |
+
+> **Stage 6 (4/3/2 Drill) is deliberately interactive-only — there is no systemd unit for it.** Drill generation asks you to pick which dates and drill types to build, so it is run by hand via `hellotalk-generate-drill-interactive.sh`. The automated timers jump straight from Analyze to Anki.
 
 View timer status:
 ```bash
@@ -271,6 +298,8 @@ HelloTalk-Learning-Pipeline/
 │   ├── hellotalk-transcribe.sh
 │   ├── hellotalk-cleanse.sh
 │   ├── hellotalk-analyze.sh
+│   ├── hellotalk-generate-drill-interactive.sh
+│   ├── hellotalk-generate-drill.sh
 │   ├── hellotalk-generate-anki.sh
 │   ├── hellotalk-llm-call.py
 │   ├── hellotalk-provider-resolve.sh
@@ -285,7 +314,11 @@ HelloTalk-Learning-Pipeline/
 │   ├── analysis-grammar.md
 │   ├── analysis-semantic.md
 │   ├── anki-generator-grammar.md
-│   └── anki-generator-semantic.md
+│   ├── anki-generator-semantic.md
+│   └── drill/                # 4/3/2 drill prompts
+│       ├── grammar-drill-prompt.md
+│       ├── vocabulary-drill-prompt.md
+│       └── transcript-regenerator-prompt.md
 ├── config/                   # Configuration templates
 │   ├── env.template
 │   └── cleanse.conf.template
@@ -305,6 +338,7 @@ HelloTalk-Learning-Pipeline/
 ### Stage 2 — Process
 - Skips files recorded "today" (to avoid pulling active recordings)
 - Quarantines malformed audio to `Invalid_audio/`
+- Quarantines oversized files (> 200 MB — likely stuck recordings) to `Invalid_audio/`
 - Denoises with `ffmpeg afftdn`
 - Detects silence with `silencedetect`
 - Splits into speech segments; drops segments < 2 seconds
@@ -329,14 +363,26 @@ HelloTalk-Learning-Pipeline/
 - **Consolidates sparse days**: days with fewer than `MERGE_MIN_LINES` (default 80) lines are prepended into the next day's `merged.txt` with a date separator header, and the sparse day's folder is removed. This avoids wasting API calls on thin content. Cascade-safe: if absorbing a sparse day still leaves the target under threshold, it gets consolidated further in the same pass.
 - Runs two independent LLM analyses:
   - **Grammar** — identifies recurring grammatical errors and structural calques from L1 (Mandarin)
-  - **Semantic** — identifies near-miss collocations, missed idioms, semantic boundary errors, register mismatches
+  - **Semantic** — identifies three sub-types of lexical issue: near-miss collocations, missed idiomatic phrasing, and semantic boundary errors. Duplicate occurrences of the same underlying pattern are deduplicated into a single finding.
 - Respects quota sentinels: if a provider hits its daily limit, the batch aborts gracefully and resumes later
 
-### Stage 6 — Generate Anki
+### Stage 6 — 4/3/2 Drill
+- A timed fluency drill: you retell the same content three times at shrinking durations (4 min → 3 min → 2 min). The compression forces proceduralization — you stop planning and start producing.
+- **Interactive-only** by design; there is no systemd timer for this stage.
+  - `hellotalk-generate-drill-interactive.sh` — the recommended entry point. Presents a picker for which dates and drill types (grammar / vocabulary / both) to build, and always includes transcript context.
+  - `hellotalk-generate-drill.sh` — the non-interactive batch variant that walks every analyzed day.
+- **Inputs:** `Analysis/YYYY-MM-DD/grammar.md` and `semantic.md`, plus the raw or cleaned transcript for topic/context reconstruction.
+- **Outputs:** `Drill/sessions/YYYY-MM-DD/grammar-drill.md` and `vocabulary-drill.md` — a content skeleton plus a target-structure / chunk list to talk *from*, not a script to read aloud.
+- Prompts live in `prompts/drill/`:
+  - `grammar-drill-prompt.md` — builds a grammar-focused 4/3/2 session from `grammar.md`
+  - `vocabulary-drill-prompt.md` — builds a chunk/collocation-focused session from `semantic.md`
+  - `transcript-regenerator-prompt.md` — reconstructs a clean, speaker-labeled transcript from messy ASR output, using the analysis files as anchors
+
+### Stage 7 — Generate Anki
 - Takes `grammar.md` and `semantic.md` from Stage 5
 - Generates tab-separated flashcard files:
   - `grammar_cards.tsv` — FILL_IN_BLANK and CORRECT_THE_ERROR cards
-  - `chunk_cards.tsv` — SITUATION→CHUNK, CHUNK→REGISTER, PATTERN_COMPLETION, SEMANTIC_BOUNDARY cards
+  - `chunk_cards.tsv` — ERROR_CORRECTION, COLLOCATION_COMPLETION, IDIOM_UPGRADE, and PATTERN_COMPLETION cards, each mapped from its upstream semantic sub-type
 - Each card includes native-chunk examples, interference notes, and contextual example sentences
 
 ---

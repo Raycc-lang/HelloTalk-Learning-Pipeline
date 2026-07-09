@@ -1,0 +1,377 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ── Config ──────────────────────────────────────────────────────────────
+ANALYSIS_DIR="${ANALYSIS_DIR:-$HOME/Android/HelloTalkCapture/Analysis}"
+DRILL_DIR="${DRILL_DIR:-$HOME/Android/HelloTalkCapture/Drill/sessions}"
+PROMPT_DIR="${PROMPT_DIR:-$HOME/Android/HelloTalkCapture/Drill}"
+TRANSCRIPT_DIR="${TRANSCRIPT_DIR:-$HOME/Android/HelloTalkCapture/Cleaned_Transcripts}"
+LLM_CALL="${LLM_CALL:-$HOME/.local/bin/hellotalk-llm-call.py}"
+HARD_TIMEOUT="${HARD_TIMEOUT:-2400}"
+LOG_TAG="hellotalk-drill"
+
+GRAMMAR_DRILL_PROMPT="$PROMPT_DIR/grammar-drill-prompt.md"
+VOCAB_DRILL_PROMPT="$PROMPT_DIR/vocabulary-drill-prompt.md"
+
+# Load env (API keys, PROVIDER, MODEL, etc.)
+if [ -f "$HOME/.config/hellotalk/env" ]; then
+    set -a
+    # shellcheck source=/dev/null
+    . "$HOME/.config/hellotalk/env"
+    set +a
+fi
+
+# 4/3/2 drill generation — moderate reasoning for topic selection + skeleton.
+: "${REASONING_EFFORT:=medium}"
+export REASONING_EFFORT
+
+log() { echo "  $(date '+%H:%M:%S') $*"; }
+
+# ── Resolve provider ────────────────────────────────────────────────────
+# shellcheck source=/dev/null
+. "$HOME/.local/bin/hellotalk-provider-resolve.sh"
+export API_BASE API_KEY MODEL MAX_TOKENS PROVIDER
+
+if [ -z "${API_KEY:-}" ]; then
+    echo "ERROR: API_KEY not set for PROVIDER=$PROVIDER." >&2
+    exit 1
+fi
+
+# shellcheck source=/dev/null
+. "$HOME/.local/bin/hellotalk-quota-check.sh"
+hellotalk_quota_check
+
+# ── Collect available days ──────────────────────────────────────────────
+declare -a DAYS=()
+declare -A DAY_GRAMMAR DAY_SEMANTIC DAY_HAS_MERGED
+
+shopt -s nullglob
+for day_dir in "$ANALYSIS_DIR"/????-??-??; do
+    [ -d "$day_dir" ] || continue
+    day="$(basename "$day_dir")"
+    has_any=false
+    if [ -s "$day_dir/grammar.md" ]; then
+        DAY_GRAMMAR[$day]="$day_dir/grammar.md"
+        has_any=true
+    fi
+    if [ -s "$day_dir/semantic.md" ]; then
+        DAY_SEMANTIC[$day]="$day_dir/semantic.md"
+        has_any=true
+    fi
+    # Check for raw transcript (optional context for drill)
+    if [ -s "$day_dir/merged.txt" ]; then
+        DAY_HAS_MERGED[$day]="$day_dir/merged.txt"
+    elif [ -s "$TRANSCRIPT_DIR/$day/merged.txt" ]; then
+        DAY_HAS_MERGED[$day]="$TRANSCRIPT_DIR/$day/merged.txt"
+    fi
+    $has_any && DAYS+=("$day")
+done
+shopt -u nullglob
+
+if [ ${#DAYS[@]} -eq 0 ]; then
+    echo "No analysis files found in $ANALYSIS_DIR"
+    exit 1
+fi
+
+# Sort chronologically
+IFS=$'\n' DAYS=($(printf '%s\n' "${DAYS[@]}" | sort)); unset IFS
+
+# ── Interactive selection ───────────────────────────────────────────────
+echo ""
+echo "╔══════════════════════════════════════════════════════╗"
+echo "║     HelloTalk 4/3/2 Drill Session Generator         ║"
+echo "╚══════════════════════════════════════════════════════╝"
+echo ""
+echo "Provider: $PROVIDER  Model: ${MODEL:-<default>}  Reasoning: ${REASONING_EFFORT}"
+echo ""
+
+# Show available days with status
+printf "  %-4s  %-12s  %-10s  %-10s  %s\n" "#" "Date" "Grammar" "Semantic" "Drill?"
+printf "  %-4s  %-12s  %-10s  %-10s  %s\n" "───" "────────────" "──────────" "──────────" "────────"
+
+for i in "${!DAYS[@]}"; do
+    day="${DAYS[$i]}"
+    g_size="-"; s_size="-"
+    g_drill="-"; s_drill="-"
+
+    if [ -n "${DAY_GRAMMAR[$day]:-}" ]; then
+        g_size="$(wc -c < "${DAY_GRAMMAR[$day]}")B"
+        [ -f "$DRILL_DIR/$day/grammar-drill.md" ] && g_drill="✓"
+    fi
+    if [ -n "${DAY_SEMANTIC[$day]:-}" ]; then
+        s_size="$(wc -c < "${DAY_SEMANTIC[$day]}")B"
+        [ -f "$DRILL_DIR/$day/vocabulary-drill.md" ] && s_drill="✓"
+    fi
+
+    drill_status=""
+    [ "$g_drill" = "✓" ] && drill_status="G"
+    [ "$s_drill" = "✓" ] && drill_status="${drill_status}S"
+    [ -z "$drill_status" ] && drill_status="-"
+
+    printf "  %-4s  %-12s  %-10s  %-10s  %s\n" \
+        "$((i+1))" "$day" "$g_size" "$s_size" "$drill_status"
+done
+
+echo ""
+echo "  G = grammar drill exists, S = vocabulary drill exists"
+echo ""
+
+# ── Day selection ───────────────────────────────────────────────────────
+read -rp "Select days (number, range like 3-7, 'all', or comma-separated): " day_input
+
+declare -a SELECTED_DAYS=()
+
+parse_selection() {
+    local input="$1"
+    IFS=',' read -ra parts <<< "$input"
+    for part in "${parts[@]}"; do
+        part=$(echo "$part" | xargs)
+        if [[ "$part" =~ ^[0-9]+-[0-9]+$ ]]; then
+            local start="${part%-*}" end="${part#*-}"
+            for ((j=start; j<=end; j++)); do
+                local idx=$((j-1))
+                if [ $idx -ge 0 ] && [ $idx -lt ${#DAYS[@]} ]; then
+                    SELECTED_DAYS+=("${DAYS[$idx]}")
+                fi
+            done
+        elif [[ "$part" =~ ^[0-9]+$ ]]; then
+            local idx=$((part-1))
+            if [ $idx -ge 0 ] && [ $idx -lt ${#DAYS[@]} ]; then
+                SELECTED_DAYS+=("${DAYS[$idx]}")
+            fi
+        elif [ "$part" = "all" ]; then
+            SELECTED_DAYS=("${DAYS[@]}")
+            return
+        fi
+    done
+}
+
+if [ "$(echo "$day_input" | xargs)" = "all" ]; then
+    SELECTED_DAYS=("${DAYS[@]}")
+else
+    parse_selection "$day_input"
+fi
+
+# Deduplicate
+IFS=$'\n' SELECTED_DAYS=($(printf '%s\n' "${SELECTED_DAYS[@]}" | sort -u)); unset IFS
+
+if [ ${#SELECTED_DAYS[@]} -eq 0 ]; then
+    echo "No valid days selected."
+    exit 1
+fi
+
+echo ""
+echo "  Selected: ${#SELECTED_DAYS[@]} day(s) — ${SELECTED_DAYS[*]}"
+echo ""
+
+# ── Type selection ──────────────────────────────────────────────────────
+echo "  Drill types:"
+echo "    1) grammar  — grammar structure 4/3/2 drill"
+echo "    2) vocabulary — chunk/collocation 4/3/2 drill"
+echo "    3) both"
+echo ""
+read -rp "Select type [1/2/3, default=3]: " type_choice
+type_choice="${type_choice:-3}"
+
+declare -a JOB_TYPES=()
+case "$type_choice" in
+    1) JOB_TYPES=("grammar") ;;
+    2) JOB_TYPES=("vocabulary") ;;
+    3|both) JOB_TYPES=("grammar" "vocabulary") ;;
+    *) echo "Invalid choice."; exit 1 ;;
+esac
+
+# ── Include transcript context (always on) ──────────────────────────────
+INCLUDE_TRANSCRIPT=true
+
+# ── Force regenerate? ──────────────────────────────────────────────────
+read -rp "Force regenerate even if up to date? [y/N]: " force_choice
+force_choice="${force_choice:-N}"
+FORCE=false
+[[ "$force_choice" =~ ^[Yy] ]] && FORCE=true
+
+# ── Preview plan ────────────────────────────────────────────────────────
+echo ""
+echo "╔══════════════════════════════════════════════════════╗"
+echo "║  Plan                                                 ║"
+echo "╚══════════════════════════════════════════════════════╝"
+echo ""
+
+total_jobs=0
+for day in "${SELECTED_DAYS[@]}"; do
+    for jtype in "${JOB_TYPES[@]}"; do
+        if [ "$jtype" = "grammar" ]; then
+            src="${DAY_GRAMMAR[$day]:-}"
+            out="$DRILL_DIR/$day/grammar-drill.md"
+        else
+            src="${DAY_SEMANTIC[$day]:-}"
+            out="$DRILL_DIR/$day/vocabulary-drill.md"
+        fi
+        [ -z "$src" ] && continue
+
+        status="generate"
+        if [ -f "$out" ] && ! $FORCE; then
+            if [ "$out" -nt "$src" ]; then
+                status="skip (up to date)"
+            fi
+        fi
+
+        printf "  %-12s  %-10s  %s\n" "$day" "$jtype" "$status"
+        ((total_jobs++)) || true
+    done
+done
+
+echo ""
+echo "  Total: $total_jobs job(s)"
+echo ""
+
+if [ $total_jobs -eq 0 ]; then
+    echo "  Nothing to do."
+    exit 0
+fi
+
+read -rp "Proceed? [Y/n]: " go
+go="${go:-Y}"
+if [[ ! "$go" =~ ^[Yy] ]]; then
+    echo "Aborted."
+    exit 0
+fi
+
+# ── Execute ─────────────────────────────────────────────────────────────
+echo ""
+mkdir -p "$DRILL_DIR"
+
+generated=0
+skipped=0
+failed=0
+
+for day in "${SELECTED_DAYS[@]}"; do
+    for jtype in "${JOB_TYPES[@]}"; do
+        if [ "$jtype" = "grammar" ]; then
+            src="${DAY_GRAMMAR[$day]:-}"
+            prompt="$GRAMMAR_DRILL_PROMPT"
+            out_name="grammar-drill.md"
+        else
+            src="${DAY_SEMANTIC[$day]:-}"
+            prompt="$VOCAB_DRILL_PROMPT"
+            out_name="vocabulary-drill.md"
+        fi
+
+        [ -z "$src" ] && continue
+
+        day_drill="$DRILL_DIR/$day"
+        mkdir -p "$day_drill"
+        out="$day_drill/$out_name"
+
+        # Check if up to date
+        if [ -f "$out" ] && ! $FORCE; then
+            if [ "$out" -nt "$src" ] && [ "$out" -nt "$prompt" ]; then
+                log "[$day/$jtype] Skipped (up to date)."
+                ((skipped++)) || true
+                continue
+            fi
+        fi
+
+        log "[$day/$jtype] Generating..."
+
+        # Build input: analysis file + optionally transcript
+        tmpinput=$(mktemp)
+        tmpout=$(mktemp)
+        cat "$src" > "$tmpinput"
+
+        # Append transcript context if requested
+        if $INCLUDE_TRANSCRIPT; then
+            transcript_src=""
+            if [ -n "${DAY_HAS_MERGED[$day]:-}" ]; then
+                transcript_src="${DAY_HAS_MERGED[$day]}"
+            elif [ -s "$TRANSCRIPT_DIR/$day/merged.txt" ]; then
+                transcript_src="$TRANSCRIPT_DIR/$day/merged.txt"
+            fi
+
+            if [ -n "$transcript_src" ]; then
+                printf "\n\n--- Raw transcript (for topic/context reconstruction only) ---\n\n" >> "$tmpinput"
+                cat "$transcript_src" >> "$tmpinput"
+            fi
+
+            # Also check for cleaned transcript
+            cleaned="$day_drill/cleaned-transcript.md"
+            if [ -f "$cleaned" ] && [ -s "$cleaned" ]; then
+                printf "\n\n--- Cleaned transcript (for topic/context reconstruction only) ---\n\n" >> "$tmpinput"
+                cat "$cleaned" >> "$tmpinput"
+            fi
+        fi
+
+        if [ ! -s "$tmpinput" ]; then
+            rm -f "$tmpinput" "$tmpout"
+            log "[$day/$jtype] Skipped — input is empty."
+            ((failed++)) || true
+            continue
+        fi
+
+        start_ts=$(date +%s)
+        rc=0
+        timeout "$HARD_TIMEOUT" python3 "$LLM_CALL" \
+            "$prompt" "$tmpinput" "$tmpout" 2>&1 || rc=$?
+        elapsed=$(( $(date +%s) - start_ts ))
+
+        if [ $rc -eq 0 ]; then
+            if [ -s "$tmpout" ]; then
+                mv "$tmpout" "$out"
+                log "[$day/$jtype] Done — $(wc -c < "$out") bytes in ${elapsed}s"
+                ((generated++)) || true
+            else
+                rm -f "$tmpout"
+                log "[$day/$jtype] Failed — empty response."
+                ((failed++)) || true
+            fi
+        else
+            rm -f "$tmpout"
+            case $rc in
+                2)  log "[$day/$jtype] QUOTA HIT — sentinel written."
+                    log "Aborting. Generated: $generated, Skipped: $skipped, Failed: $failed"
+                    exit 75 ;;
+                3)  log "[$day/$jtype] FATAL API error."
+                    log "Aborting. Generated: $generated, Skipped: $skipped, Failed: $failed"
+                    exit 1 ;;
+                124) log "[$day/$jtype] Timed out (${HARD_TIMEOUT}s)."
+                    ((failed++)) || true ;;
+                *)  log "[$day/$jtype] Failed (rc=$rc)."
+                    ((failed++)) || true ;;
+            esac
+        fi
+
+        rm -f "$tmpinput"
+    done
+done
+
+# ── Summary ─────────────────────────────────────────────────────────────
+echo ""
+echo "╔══════════════════════════════════════════════════════╗"
+echo "║  Done!                                                ║"
+echo "╚══════════════════════════════════════════════════════╝"
+echo ""
+echo "  Generated: $generated"
+echo "  Skipped:   $skipped"
+echo "  Failed:    $failed"
+echo ""
+
+if [ $generated -gt 0 ]; then
+    read -rp "Preview generated drill sessions? [y/N]: " preview
+    if [[ "$preview" =~ ^[Yy] ]]; then
+        for day in "${SELECTED_DAYS[@]}"; do
+            for jtype in "${JOB_TYPES[@]}"; do
+                if [ "$jtype" = "grammar" ]; then
+                    out="$DRILL_DIR/$day/grammar-drill.md"
+                else
+                    out="$DRILL_DIR/$day/vocabulary-drill.md"
+                fi
+                [ -f "$out" ] || continue
+                echo ""
+                echo "── $day/$jtype ($(wc -l < "$out") lines) ──"
+                head -20 "$out"
+                echo "  ..."
+                echo ""
+            done
+        done
+    fi
+fi
