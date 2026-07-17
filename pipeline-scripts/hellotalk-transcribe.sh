@@ -380,7 +380,9 @@ for base in "${!bases[@]}"; do
     fi
 
     # Concatenate usable segment transcripts in order.
-    # Keep per-segment .txt files so reruns can rebuild deterministically.
+    # Per-segment .txt files are transcribe-internal and only needed until the
+    # merge succeeds; they are deleted right after the merge below to avoid the
+    # downstream cleanse/analyze stages double-counting segment + merged content.
     tmp_merge="$(mktemp)"
     usable_segments=0
     if [ "$max_seg" -gt 0 ]; then
@@ -406,6 +408,10 @@ for base in "${!bases[@]}"; do
 
     mv "$tmp_merge" "$merged_file"
     log "Merged -> $base.txt ($(wc -l < "$merged_file") lines, usable_segments=$usable_segments, discovered_segments=$max_seg)"
+    # Merge succeeded: the per-segment transcript files are no longer needed
+    # (the merge loop above already consumed them this iteration). Delete them
+    # so cleanse.sh's Transcripts/*.txt glob no longer sees both representations.
+    rm -f "$TRANSCRIPT_DIR/${base}_"[0-9][0-9][0-9].txt
     merged=$((merged + 1))
 done
 

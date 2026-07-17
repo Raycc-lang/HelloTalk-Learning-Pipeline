@@ -36,10 +36,19 @@ if [ "$WAV_COUNT" -eq 0 ] && [ "$PCM_COUNT" -eq 0 ]; then
 fi
 
 # Stage .wav files to /sdcard/ (accessible without root for adb pull)
+wav_path_ok=0
 if [ "$WAV_COUNT" -gt 0 ]; then
     log "Staging .wav files to $STAGING_DIR..."
     $ADB -s "$DEVICE" shell "su -c 'mkdir -p ${STAGING_DIR}'"
-    $ADB -s "$DEVICE" shell "su -c 'cp ${REMOTE_DIR}/*.wav ${STAGING_DIR}/'"
+    cp_result=$($ADB -s "$DEVICE" shell "su -c 'cp ${REMOTE_DIR}/*.wav ${STAGING_DIR}/ && echo COPY_OK'")
+    if ! echo "$cp_result" | grep -q COPY_OK; then
+        log "ERROR: staging copy failed: $cp_result"
+        exit 1
+    fi
+
+    # Capture staged basenames before pulling so we can verify each file
+    # actually landed locally after the pull (mtime-based checks are unreliable).
+    staged_files=$($ADB -s "$DEVICE" shell "su -c 'ls ${STAGING_DIR}'" | tr -d '\r')
 
     # Pull .wav files to local storage
     log "Pulling .wav files to $LOCAL_DIR..."
@@ -47,22 +56,34 @@ if [ "$WAV_COUNT" -gt 0 ]; then
     $ADB -s "$DEVICE" pull "$STAGING_DIR/." "$LOCAL_DIR/" || pull_rc=$?
 
     if [ "$pull_rc" -eq 0 ]; then
-        # Verify local file count matches expected WAV_COUNT
-        local_wav_count=$(find "$LOCAL_DIR" -maxdepth 1 -name '*.wav' -newer "$LOCAL_DIR" -type f 2>/dev/null | wc -l || echo 0)
-        log "Pull succeeded. Local .wav files present: $local_wav_count (expected: $WAV_COUNT)."
+        # Verify every staged file exists locally and is non-empty before
+        # touching device originals.
+        verify_ok=1
+        missing=""
+        while IFS= read -r name; do
+            [ -z "$name" ] && continue
+            if [ ! -s "$LOCAL_DIR/$name" ]; then
+                verify_ok=0
+                missing="$missing $name"
+            fi
+        done <<< "$staged_files"
 
-        # Clear staged .wav files to avoid re-pulling duplicates next run
-        log "Clearing staged .wav files from $STAGING_DIR..."
-        $ADB -s "$DEVICE" shell "su -c 'rm -f ${STAGING_DIR}/*.wav'"
+        if [ "$verify_ok" -eq 1 ]; then
+            log "Pull verified: all staged .wav files present locally."
 
-        # Delete .wav originals from device
-        log "Deleting .wav files from device..."
-        $ADB -s "$DEVICE" shell "su -c 'rm -f ${REMOTE_DIR}/*.wav'"
+            # Clear staged .wav files to avoid re-pulling duplicates next run
+            log "Clearing staged .wav files from $STAGING_DIR..."
+            $ADB -s "$DEVICE" shell "su -c 'rm -f ${STAGING_DIR}/*.wav'"
 
-        # Delete .pcm files from device (not needed, .wav has same data with header)
-        if [ "$PCM_COUNT" -gt 0 ]; then
-            log "Deleting .pcm files from device..."
-            $ADB -s "$DEVICE" shell "su -c 'rm -f ${REMOTE_DIR}/*.pcm'"
+            # Delete .wav originals from device
+            log "Deleting .wav files from device..."
+            $ADB -s "$DEVICE" shell "su -c 'rm -f ${REMOTE_DIR}/*.wav'"
+            wav_path_ok=1
+        else
+            log "ERROR: verification failed, missing/empty local files:$missing"
+            log "Clearing staged .wav files from $STAGING_DIR..."
+            $ADB -s "$DEVICE" shell "su -c 'rm -f ${STAGING_DIR}/*.wav'"
+            exit 1
         fi
     else
         log "ERROR: adb pull failed (rc=$pull_rc). Keeping device originals for retry."
@@ -73,4 +94,17 @@ if [ "$WAV_COUNT" -gt 0 ]; then
     fi
 fi
 
-log "Done. Pulled $WAV_COUNT .wav files, deleted $PCM_COUNT .pcm files."
+# Delete .pcm files from device (not needed, .wav has same data with header).
+# Only safe when the wav path fully succeeded, or there were no .wav files to begin with.
+pcm_deleted=0
+if [ "$PCM_COUNT" -gt 0 ] && { [ "$wav_path_ok" -eq 1 ] || [ "$WAV_COUNT" -eq 0 ]; }; then
+    log "Deleting .pcm files from device..."
+    $ADB -s "$DEVICE" shell "su -c 'rm -f ${REMOTE_DIR}/*.pcm'"
+    pcm_deleted=1
+fi
+
+if [ "$pcm_deleted" -eq 1 ]; then
+    log "Done. Pulled $WAV_COUNT .wav files, deleted $PCM_COUNT .pcm files."
+else
+    log "Done. Pulled $WAV_COUNT .wav files, $PCM_COUNT .pcm files not deleted."
+fi

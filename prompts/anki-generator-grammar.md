@@ -3,9 +3,9 @@ You will receive one or more error patterns. For each pattern, generate 5 cards.
 
 ━━━ INPUT FORMAT ━━━
 Each pattern contains:
-  - PATTERN NAME
-  - RULE: the grammatical constraint being violated
+  - PATTERN NAME: also carries the grammatical rule being violated
   - ERROR FORM: cleaned examples of the error structure
+  - VERBATIM: the learner's actual words, when present (optional — present only in newer analysis files)
   - CORRECT ANCHORS: the corrected versions — preserve their structure in generated sentences
   - INTERFERENCE NOTE: why Mandarin L1 causes this error
   - WHY IT MATTERS: comprehension or naturalness impact
@@ -33,7 +33,7 @@ CORRECT_THE_ERROR:
   Before finalizing any sentence, apply the native-speaker test: would a fluent speaker say exactly this, in exactly this register, without rephrasing? If not, revise.
   Contractions, hedges ("honestly," "actually," "I mean"), and register-appropriate informality are permitted and often required.
 2. Vary topic domains: relationships, work, technology, food, health, money, learning.
-  Do not repeat a domain within one pattern's 10 cards.
+  Do not repeat a domain within one pattern's 5 cards.
 3. Multiple correct answers are mandatory when they naturally exist. If only one correct answer exists, provide exactly one — do not fabricate alternatives.
 4. Pattern field: write a productive template using <code> tags for variable slots.
   Example: <code>easy to + [VERB]</code>. Never write a prohibition or a rule label.

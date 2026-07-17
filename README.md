@@ -4,11 +4,14 @@ An automated 7-stage pipeline that extracts voice messages from the HelloTalk la
 
 Built for intermediate ESL learners whose L1 is Mandarin Chinese, but adaptable to any language pair.
 
+[English](README.md) | [中文](README.zh-CN.md)
+
 ---
 
 ## Table of Contents
 
 - [Motivation](#motivation)
+- [Caveats](#caveats)
 - [Architecture](#architecture)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
@@ -28,6 +31,18 @@ Built for intermediate ESL learners whose L1 is Mandarin Chinese, but adaptable 
 ## Motivation
 
 Language learners on HelloTalk produce a large volume of spontaneous, authentic spoken output every day. That output is a goldmine for personalized study material — but it is lost the moment the call ends. This pipeline captures, cleans, and transforms that output into structured Anki cards that target *your* specific error patterns and vocabulary gaps.
+
+---
+
+## Caveats
+
+Read these before relying on the pipeline. They define what this tool is good for and where it stops.
+
+**This pipeline surfaces errors you already make but don't notice - it does not teach you new language.** It is a feedback mirror, not a textbook. If a structure is entirely outside your active knowledge, no amount of analyzing your own output will introduce it. You still need comprehensible input and explicit study for acquisition; the pipeline only tightens what you can already produce.
+
+**The audio source is not tied to HelloTalk.** The capture module happens to hook HelloTalk because that's where this project started, but the pipeline itself operates on `.wav` files. Any source of recorded spoken practice - another language-exchange app, a tutor platform, voice memos from self-talk - works equally well. Swap out Stage 1 (Pull) for whatever gets your audio onto disk; the rest is source-agnostic.
+
+**Always read the analysis output yourself before moving on.** The LLM is wrong sometimes: it misattributes errors, invents patterns that aren't there, or marks correct usage as wrong. The pipeline deliberately does not add an automated verification step - reviewing the feedback yourself is itself a noticing exercise, which is part of the learning. Handing that step to a model would quietly remove one of the more valuable moments in the loop. So read `grammar.md` and `semantic.md`, check whether the flagged errors are real, and only then run the drill or Anki stages.
 
 ---
 
@@ -323,6 +338,7 @@ HelloTalk-Learning-Pipeline/
 │   ├── env.template
 │   └── cleanse.conf.template
 ├── README.md
+├── README.zh-CN.md
 └── LICENSE
 ```
 

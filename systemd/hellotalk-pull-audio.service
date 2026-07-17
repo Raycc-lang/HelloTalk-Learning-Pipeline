@@ -3,11 +3,16 @@ Description=Pull HelloTalk captured audio from Android device
 Wants=network-online.target
 After=network-online.target
 OnSuccess=hellotalk-process-audio.service
+StartLimitIntervalSec=3600
+StartLimitBurst=3
 
 [Service]
 Type=oneshot
 ExecStart=%h/.local/bin/hellotalk-pull-audio.sh
 Environment=HOME=%h
+TimeoutStartSec=900
+Restart=on-failure
+RestartSec=300
 
 [Install]
 WantedBy=default.target

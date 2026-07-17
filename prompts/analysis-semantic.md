@@ -53,6 +53,8 @@ Structure each item so it can be pasted directly as input to the card generation
 
 SUB-TYPE: [one of the three above, in caps]
 ORIGINAL PHRASE: [the relevant clause or phrase containing the error, stripped of filler repetition, preserving the target word in context. Do not transcribe the full utterance verbatim.]
+VERBATIM: [the learner's exact words from the transcript for this instance]
+INSTANCES: [count; when the same pattern occurs more than once, one verbatim line per occurrence]
 INTENT: [the learner's intended meaning, one sentence]
 NATIVE CHUNKS:
   — [expression] [HIGH FREQ] or [SITUATIONAL]

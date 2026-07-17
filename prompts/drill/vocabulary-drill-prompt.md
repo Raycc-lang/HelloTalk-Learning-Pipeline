@@ -13,6 +13,8 @@ One or more semantic.md entries, structured as follows:
 ```
 SUB-TYPE: [SEMANTIC BOUNDARY ERROR / MISSED IDIOMATIC PHRASING / NEAR-MISS COLLOCATION]
 ORIGINAL PHRASE: [the relevant clause or phrase containing the error]
+VERBATIM: [optional — present only in newer analysis files; the learner's exact words for this instance]
+INSTANCES: [optional — present only in newer analysis files; count and per-occurrence verbatim lines]
 INTENT: [the learner's intended meaning, one sentence]
 NATIVE CHUNKS:
   — [expression] [HIGH FREQ] or [SITUATIONAL]
@@ -28,7 +30,8 @@ CONFIDENCE: [HIGH / MEDIUM / LOW]
 A raw or cleaned transcript of the learner's speech — used for topic/context reconstruction only. The semantic.md entries are the primary input.
 
 **What to extract from each entry for drill generation:**
-  - **ORIGINAL PHRASE:** the learner's actual attempt — may be a circumlocution, near-miss, or hesitation
+  - **ORIGINAL PHRASE:** the learner's attempt, lightly normalized — may be a circumlocution, near-miss, or hesitation
+  - **VERBATIM:** the learner's exact words, when present — carries the real quote where ORIGINAL PHRASE has been normalized
   - **INTENT:** what they were trying to express — maps directly to the drill's "what you mean to say"
   - **NATIVE CHUNKS:** the target expressions — this is the output target for the drill
   - **SUB-TYPE:** context for how the error occurred (boundary confusion, near-miss, or missed idiom) — all three types are drillable; none require the model to judge the learner's prior exposure to the correct form, since that isn't something semantic.md records
@@ -67,7 +70,7 @@ The only field worth checking is CONFIDENCE. If an entry is marked LOW, don't ex
 **Source context:** [1-2 sentences — what the learner was actually trying to say, reconstructed from the semantic entries and transcript. Not invented.]
 
 **Target chunks this session:**
-For each: `[chunk]` — one model sentence in this topic's domain; the learner's actual original attempt this maps back to (quoted from ORIGINAL PHRASE), if one exists. If CONFIDENCE is LOW for this entry, append "(low confidence — verify before drilling)".
+For each: `[chunk]` — one model sentence in this topic's domain; the learner's actual original attempt this maps back to (quoted from VERBATIM when present, otherwise from ORIGINAL PHRASE prefixed with `~` to mark it as reconstructed rather than verbatim), if one exists. If CONFIDENCE is LOW for this entry, append "(low confidence — verify before drilling)".
 
 **Content skeleton** (4-7 bullets — the learner's own ideas, polished, phrased so that each bullet plausibly calls for one or more target chunks. NOT full sentences to memorize — a map to talk from, not a script to read. Tag each bullet `[E]`/`[I]` per the fidelity rule above.)
 For each bullet, optionally include up to 2 framing alternatives — different ways to lead into or frame the same idea, varying only the surrounding phrasing, never the target chunk itself. These are for the pre-drill read-through only, not a menu to consult mid-round — read once, then put away before timing starts, same as the skeleton and target list.

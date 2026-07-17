@@ -37,7 +37,7 @@ fi
 . "$HOME/.local/bin/hellotalk-quota-check.sh"
 hellotalk_quota_check
 
-log "Provider: $PROVIDER  Model: $MODEL  Reasoning: ${REASONING_EFFORT}  API: $API_BASE"
+log "Provider: $PROVIDER  Model: $MODEL  Reasoning: ${REASONING_EFFORT:-provider-default}  API: $API_BASE"
 
 # ── Collect prompt files that exist and are non-empty ────────────────
 declare -A PROMPTS
@@ -71,10 +71,14 @@ for date_dir in "$CLEANED_DIR"/????-??-??; do
     mkdir -p "$day_analysis"
     merged="$day_analysis/merged.txt"
 
-    # Skip if source was already consolidated into a later day
+    # A ".consolidated" marker means this day was previously folded into a
+    # later day. Reaching here means the plain source dir also exists again
+    # with matching transcripts — i.e. late recordings arrived after
+    # consolidation. Warn and proceed with the merge instead of silently
+    # dropping them.
     src_dir="$(dirname "${individual[0]}")"
     if [ -d "${src_dir}.consolidated" ]; then
-        continue
+        log "WARNING: late transcripts arrived for previously-consolidated day $day — re-merging (not skipping)."
     fi
 
     # Find the newest individual transcript
@@ -140,6 +144,13 @@ for i in "${!sorted_days[@]}"; do
 
     line_count=$(wc -l < "$merged")
     if [ "$line_count" -lt "$MERGE_MIN_LINES" ]; then
+        # Never destroy a day that already carries completed (paid) LLM
+        # analysis outputs — consolidating would rm -rf them and orphan
+        # downstream artifacts keyed to this date.
+        if [ -s "$day_dir/grammar.md" ] || [ -s "$day_dir/semantic.md" ]; then
+            log "Sparse day $day already analyzed — keeping (not consolidating)."
+            continue
+        fi
         # Find the next day that still exists (may have been consolidated too)
         next_day=""
         next_idx=$((i + 1))
@@ -208,11 +219,27 @@ for day_dir in "$ANALYSIS_DIR"/????-??-??; do
         prompt_file="${PROMPTS[$prompt_name]}"
         output_file="$day_dir/${prompt_name}.md"
 
-        # Skip if output exists and is newer than BOTH merged.txt and the prompt file
-        if [ -f "$output_file" ] && [ "$output_file" -nt "$merged" ] && [ "$output_file" -nt "$prompt_file" ]; then
-            log "Skipping $day/$prompt_name (up to date)."
-            ((skipped++)) || true
-            continue
+        # New input always regenerates. A changed prompt only regenerates
+        # recent days (or under FORCE_REGEN=1) so a single prompt edit does
+        # not invalidate every historical day of paid analysis at once.
+        if [ -f "$output_file" ] && [ "$output_file" -nt "$merged" ]; then
+            if [ "$output_file" -nt "$prompt_file" ]; then
+                log "Skipping $day/$prompt_name (up to date)."
+                ((skipped++)) || true
+                continue
+            fi
+            # Prompt is newer than output but input is not: gate on the window.
+            day_epoch=$(date -d "$day" +%s 2>/dev/null || echo "")
+            cutoff_epoch=$(date -d "-${REGEN_WINDOW_DAYS:-3} days" +%s 2>/dev/null || echo "")
+            in_window=0
+            if [ -n "$day_epoch" ] && [ -n "$cutoff_epoch" ] && [ "$day_epoch" -ge "$cutoff_epoch" ]; then
+                in_window=1
+            fi
+            if [ "$in_window" -ne 1 ] && [ "${FORCE_REGEN:-0}" != "1" ]; then
+                log "Skipping $day/$prompt_name (prompt changed but day outside ${REGEN_WINDOW_DAYS:-3}-day window; set FORCE_REGEN=1 to override)"
+                ((skipped++)) || true
+                continue
+            fi
         fi
 
         file_bytes=$(wc -c < "$merged")

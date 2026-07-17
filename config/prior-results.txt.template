@@ -1,0 +1,13 @@
+# Drill prior-results state file.
+#
+# Add one PATTERN NAME per line (as it appears in grammar.md, brackets
+# optional, case-insensitive) once you have produced that structure
+# correctly in a drill session. The drill generators will then annotate
+# matching entries with "PRIOR RESULT: succeeded", and the grammar drill
+# prompt turns them into unprimed [PROBE] items instead of modeled targets.
+#
+# Remove a line to demote a pattern back to a normal drilled target.
+# Lines starting with # and blank lines are ignored.
+#
+# Example:
+#   Missing Copula Before Predicate Adjective

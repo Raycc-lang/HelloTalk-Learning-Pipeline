@@ -4,6 +4,7 @@ set -euo pipefail
 # ── Directories ──────────────────────────────────────────────────────
 TRANSCRIPT_DIR="$HOME/Android/HelloTalkCapture/Transcripts"
 CLEANED_DIR="$HOME/Android/HelloTalkCapture/Cleaned_Transcripts"
+CLEANSED_ORIGINALS_DIR="$HOME/Android/HelloTalkCapture/Cleansed_Originals"
 TRANSCRIBED_DIR="$HOME/Android/HelloTalkCapture/Transcribed_audio"
 CONFIG_FILE="$HOME/.config/hellotalk/cleanse.conf"
 LOG_TAG="hellotalk-cleanse"
@@ -22,12 +23,21 @@ delete_matching_audio() {
     local wav
 
     date_dir="$(date_subdir "$transcript_base")"
+    local deleted=1
     wav="$TRANSCRIBED_DIR/$date_dir/${stem}.wav"
     if [ -f "$wav" ]; then
         rm -f "$wav"
-        return 0
+        deleted=0
     fi
-    return 1
+    # Merged recording transcripts have no single <stem>.wav; their audio lives
+    # as per-segment wavs <stem>_001.wav, _002.wav, … in the same date dir.
+    local seg_wav
+    for seg_wav in "$TRANSCRIBED_DIR/$date_dir/${stem}_"[0-9][0-9][0-9].wav; do
+        [ -f "$seg_wav" ] || continue
+        rm -f "$seg_wav"
+        deleted=0
+    done
+    return $deleted
 }
 
 # ── Load blocklist from config ───────────────────────────────────────
@@ -103,6 +113,10 @@ if [ ${#txt_files[@]} -gt 0 ]; then
 
 for src in "${txt_files[@]}"; do
     base="$(basename "$src")"
+    # Skip transcribe-internal per-segment files (<base>_NNN.txt). transcribe.sh
+    # now deletes them after a successful merge; this guards historical strays so
+    # segment + merged content isn't cleansed (and later analyzed) twice.
+    [[ "$base" =~ _[0-9]{3}\.txt$ ]] && continue
     date_dir="$(date_subdir "$base")"
     dest_dir="$CLEANED_DIR/$date_dir"
     mkdir -p "$dest_dir"
@@ -179,21 +193,25 @@ for line in sys.stdin:
     line_count=$(wc -l < "$tmpfile")
     if [ "$line_count" -gt 0 ]; then
         mv "$tmpfile" "$dest"
-        rm -f "$src"
+        orig_dir="$CLEANSED_ORIGINALS_DIR/$date_dir"
+        mkdir -p "$orig_dir"
+        mv "$src" "$orig_dir/$base"
         postdeleted=$((postdeleted + 1))
         if delete_matching_audio "$base"; then
             audio_deleted=$((audio_deleted + 1))
         fi
-        log "Done: $base — $line_count lines (source deleted)"
+        log "Done: $base — $line_count lines (source archived to Cleansed_Originals)"
         ((success++)) || true
     else
         rm -f "$tmpfile"
-        rm -f "$src"
+        orig_dir="$CLEANSED_ORIGINALS_DIR/$date_dir"
+        mkdir -p "$orig_dir"
+        mv "$src" "$orig_dir/$base"
         postdeleted=$((postdeleted + 1))
         if delete_matching_audio "$base"; then
             audio_deleted=$((audio_deleted + 1))
         fi
-        log "Deleted: $base — empty after cleansing."
+        log "Deleted: $base — empty after cleansing (source archived to Cleansed_Originals)."
     fi
 done
 

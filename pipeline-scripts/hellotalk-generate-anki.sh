@@ -56,6 +56,7 @@ mkdir -p "$ANKI_DIR"
 # Resolve API_BASE / API_KEY from PROVIDER (google|nvidia|custom).
 # shellcheck source=/dev/null
 . "$HOME/.local/bin/hellotalk-provider-resolve.sh"
+: "${MAX_TOKENS:=131072}"
 export API_BASE API_KEY MODEL MAX_TOKENS PROVIDER
 
 if [ -z "${API_KEY:-}" ]; then
@@ -98,10 +99,27 @@ for day_dir in "$ANALYSIS_DIR"/????-??-??; do
 
         [ -s "$input_file" ] || continue
 
-        if [ -f "$output_file" ] && [ "$output_file" -nt "$input_file" ] && [ "$output_file" -nt "$prompt_file" ]; then
-            log "Skipping $day/$output_name (up to date)."
-            ((skipped++)) || true
-            continue
+        # New input always regenerates. A changed prompt only regenerates
+        # recent days (or under FORCE_REGEN=1) so a single prompt edit does
+        # not invalidate every historical day of paid generation at once.
+        if [ -f "$output_file" ] && [ "$output_file" -nt "$input_file" ]; then
+            if [ "$output_file" -nt "$prompt_file" ]; then
+                log "Skipping $day/$output_name (up to date)."
+                ((skipped++)) || true
+                continue
+            fi
+            # Prompt is newer than output but input is not: gate on the window.
+            day_epoch=$(date -d "$day" +%s 2>/dev/null || echo "")
+            cutoff_epoch=$(date -d "-${REGEN_WINDOW_DAYS:-3} days" +%s 2>/dev/null || echo "")
+            in_window=0
+            if [ -n "$day_epoch" ] && [ -n "$cutoff_epoch" ] && [ "$day_epoch" -ge "$cutoff_epoch" ]; then
+                in_window=1
+            fi
+            if [ "$in_window" -ne 1 ] && [ "${FORCE_REGEN:-0}" != "1" ]; then
+                log "Skipping $day/$output_name (prompt changed but day outside ${REGEN_WINDOW_DAYS:-3}-day window; set FORCE_REGEN=1 to override)"
+                ((skipped++)) || true
+                continue
+            fi
         fi
 
         log "Generating $day/$output_name from $(basename "$input_file")..."

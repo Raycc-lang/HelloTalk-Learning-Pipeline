@@ -16,6 +16,7 @@ CARD TYPE: [FILL_IN_BLANK or CORRECT_THE_ERROR]
 FREQUENCY: [exact count — or: SINGLE INSTANCE — likely L1 pattern]
 ERROR FORM:
   — [the erroneous grammatical construction, stripped of filler repetition]
+VERBATIM: [optional — present only in newer analysis files; the learner's actual words for this instance]
 CORRECT ANCHORS:
   — [one natural corrected sentence per error form instance]
 WHY IT MATTERS: [specific impact on naturalness or comprehension]
@@ -28,7 +29,8 @@ PRIOR RESULT: [optional — "succeeded" if this exact structure came out correct
 A raw or cleaned transcript of the learner's speech — used for topic/context reconstruction only. The grammar.md entries are the primary input.
 
 **What to extract from each entry for drill generation:**
-  - **ERROR FORM(S):** the actual erroneous utterance — this is what the learner produced
+  - **ERROR FORM(S):** a normalized minimal form of the error — treat it as a reconstruction, not a quote
+  - **VERBATIM:** the learner's actual utterance, when present — prefer it wherever the learner's real words are needed
   - **CORRECT ANCHORS:** what they should have said — this is the target
   - **PATTERN NAME:** the grammatical rule involved (structure name)
   - **FREQUENCY:** how common the error is — helps prioritize
@@ -62,7 +64,7 @@ Mark each bullet with `[E]` if it's directly evidenced in the transcript or `[I]
 
 **Target structures this session:**
 For each structure:
-  `[structure name]` — one model sentence in this topic's content domain showing correct native use; then the learner's actual error this maps back to (quoted from ERROR FORM).
+  `[structure name]` — one model sentence in this topic's content domain showing correct native use; then the learner's actual error this maps back to (quoted from VERBATIM when present, otherwise from ERROR FORM prefixed with `~` to mark it as reconstructed rather than verbatim).
   If PRIOR RESULT is "succeeded" for this structure, this is a PROBE: omit the model sentence entirely from this line — show only the structure name and the original error, so production isn't primed by a freshly-read correct form. Mark it `[PROBE]`.
 
 **Content skeleton** (4-7 bullets — the learner's own ideas, polished into correct English, but NOT full sentences to memorize. A map to talk from, not a script to read. Each bullet should be phrasable multiple different ways. Tag each bullet `[E]`/`[I]` per the fidelity rule above.)

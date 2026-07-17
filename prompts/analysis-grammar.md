@@ -50,6 +50,8 @@ FREQUENCY: [exact count — or: SINGLE INSTANCE — likely L1 pattern]
 ERROR FORM:
   — [the erroneous grammatical construction, stripped of filler repetition, written as a minimal clear example of the error. Do not transcribe verbatim — extract the structure.]
   — [second instance if present]
+VERBATIM:
+  — [the learner's actual words for this instance, quoted from the transcript as closely as possible, disfluencies included — one line per ERROR FORM instance]
 CORRECT ANCHORS:
   — [one natural corrected sentence per error form instance]
   If an error form is genuinely ambiguous between two interpretations that produce meaningfully different corrections, provide both and label them: [Interpretation A] / [Interpretation B]

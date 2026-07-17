@@ -2,7 +2,7 @@
 
 The original ASR transcript (merged.txt) is unstructured, messy data — no punctuation, no capitalization, no speaker labels, garbled words, repeated segments, and counting recitation mixed in. It cannot be fed directly into a 4/3/2 drill generator as context.
 
-This prompt regenerates a clean, structured transcript using the grammar.md and semantic.md analysis files as **anchor points**. The analysis entries contain exact quotes from what the learner said (ERROR FORM, ORIGINAL PHRASE) — these are the reliable reference points to locate corresponding segments in the raw transcript and clean them.
+This prompt regenerates a clean, structured transcript using the grammar.md and semantic.md analysis files as **anchor points**. The reliable reference points for locating corresponding segments in the raw transcript are the VERBATIM lines, when present — these are exact quotes of what the learner said. ERROR FORM and ORIGINAL PHRASE are normalized reconstructions, not exact quotes, and must be matched approximately against the raw transcript rather than assumed to appear word-for-word.
 
 ---
 
@@ -23,6 +23,7 @@ CARD TYPE: [FILL_IN_BLANK / CORRECT_THE_ERROR]
 FREQUENCY: [count or SINGLE INSTANCE]
 ERROR FORM:
   — [the learner's actual erroneous utterance, verbatim or normalized]
+VERBATIM: [optional — present only in newer analysis files; the learner's exact words]
 CORRECT ANCHORS:
   — [natural corrected version]
 WHY IT MATTERS: [comprehension impact]
@@ -42,7 +43,7 @@ NATIVE CHUNKS: [target expressions]
 
 ## Method
 
-1. **Extract anchor phrases** from grammar.md (ERROR FORM lines) and semantic.md (ORIGINAL PHRASE lines). These are verbatim or near-verbatim utterances the learner actually produced.
+1. **Extract anchor phrases** from grammar.md and semantic.md VERBATIM lines, when present — these are exact quotes the learner actually produced. When VERBATIM is absent, fall back to ERROR FORM (grammar.md) and ORIGINAL PHRASE (semantic.md) lines, but treat these as normalized reconstructions rather than exact quotes — match them approximately/fuzzily against the raw transcript, not word-for-word.
 
 2. **Locate each anchor phrase** in the raw merged.txt. The raw transcript will contain the same utterance, possibly with:
    - Minor ASR differences (word substitutions by the speech model)
@@ -67,11 +68,11 @@ A clean, speaker-labeled transcript with topics grouped.
 
 **Context:** [1-2 sentences describing the situation]
 
-Learner: [clean utterance — the learner's speech, with punctuation and capitalization, preserving the actual errors but in a readable form]
+Ray: [clean utterance — the learner's speech, with punctuation and capitalization, preserving the actual errors but in a readable form]
 
 [Other speaker's turn, if reconstructable — mark as "Other:" or skip if unclear]
 
-Learner: [next learner utterance]
+Ray: [next learner utterance]
 ...
 
 ---
@@ -86,7 +87,7 @@ Learner: [next learner utterance]
 - Remove garbled non-word segments unless context makes them recoverable with high confidence
 - Remove counting recitation (1-2-3-4 sequences), repeated filler sequences
 - Group by topic conversation turns (topic shifts = new section)
-- Label the learner as "Learner:" and other speakers as "Other:" when reconstructable
+- Label the learner as "Ray:" and other speakers as "Other:" when reconstructable
 - If speech is clearly from another person and the learner's side is absent, include as context for the conversation (mark "Other:")
 - Each topic section should include all the learner's utterances in that conversation thread
 

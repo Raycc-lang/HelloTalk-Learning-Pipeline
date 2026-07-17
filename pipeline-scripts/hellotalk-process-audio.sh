@@ -47,9 +47,10 @@ for wav in "${wav_files[@]}"; do
         recording_date=$(ffprobe -v error -show_entries format_tags=creation_time -of default=noprint_wrappers=1:nokey=1 "$wav" 2>/dev/null | cut -d'T' -f1 || true)
     fi
     if [ "$recording_date" = "$CURRENT_DATE" ]; then
-        log "  Skipping file recorded today ($CURRENT_DATE), deleting..."
+        # Keep the file: the device copy was already deleted by pull-audio,
+        # so this local copy is the only one. Tomorrow's run processes it.
+        log "  Skipping file recorded today ($CURRENT_DATE); keeping for next run."
         rm -rf "$tmp_dir"
-        rm "$wav"
         continue
     fi
 
@@ -150,7 +151,9 @@ for wav in "${wav_files[@]}"; do
 
         seg_num=$((seg_num + 1))
         out="$PROCESSED_DIR/${base}_$(printf '%03d' $seg_num).wav"
-        ffmpeg -i "$denoised" -ss "$ss" -t "$seg_dur" -c copy "$out" -y -loglevel error
+        tmp_out="$PROCESSED_DIR/.tmp_${base}_$(printf '%03d' $seg_num).wav"
+        ffmpeg -i "$denoised" -ss "$ss" -t "$seg_dur" -c copy "$tmp_out" -y -loglevel error
+        mv "$tmp_out" "$out"
     done
 
     rm -rf "$tmp_dir"

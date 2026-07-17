@@ -182,6 +182,10 @@ class FatalAPIError(Exception):
     pass
 
 
+class OutputTruncated(Exception):
+    pass
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Chunking
 # ──────────────────────────────────────────────────────────────────────
@@ -332,6 +336,7 @@ def call_api(system_prompt, input_chunk, return_usage=False):
     start = time.time()
     reasoning_chunks = 0
     usage = None
+    finish_reason = None
 
     for chunk in completion:
         u = _extract_usage(chunk)
@@ -339,6 +344,9 @@ def call_api(system_prompt, input_chunk, return_usage=False):
             usage = u
         if not getattr(chunk, "choices", None):
             continue
+        fr = getattr(chunk.choices[0], "finish_reason", None)
+        if fr:
+            finish_reason = fr
         delta = chunk.choices[0].delta
         reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
         if reasoning:
@@ -352,6 +360,13 @@ def call_api(system_prompt, input_chunk, return_usage=False):
 
     elapsed = int(time.time() - start)
     result = "".join(output_parts).lstrip()
+
+    # A normal completion reports finish_reason "stop" (or None on some
+    # providers). "length" / "content_filter" mean the output was cut off —
+    # never persist a truncated analysis as if it succeeded.
+    if finish_reason in ("length", "content_filter"):
+        log(f"[WARNING: output truncated, finish_reason={finish_reason}, {len(result)} chars received]")
+        raise OutputTruncated(finish_reason)
 
     if usage:
         pt = usage.get("prompt_tokens")
@@ -401,6 +416,11 @@ def call_with_retry(system_prompt, input_chunk, chunk_label=""):
             delay = RETRY_DELAYS[transient_attempts - 1]
             log(f"[retrying in {delay}s...]")
             time.sleep(delay)
+        except OutputTruncated as t:
+            # Retrying an identical over-length request just wastes spend.
+            # Return None so callers count it failed and move on.
+            log(f"[TRUNCATED{label}: finish_reason={t} — not retrying]")
+            return None
         except Exception as e:
             kind, detail = classify_error(e)
             if kind == "quota_daily":
