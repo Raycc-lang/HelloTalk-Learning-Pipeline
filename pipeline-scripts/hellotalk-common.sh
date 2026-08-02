@@ -16,3 +16,24 @@ is_junk_file() {
     compact="$(tr -d '[:space:]' < "$file")"
     [ "$size" -le "$JUNK_MAX_BYTES" ] || [ "$compact" = "." ] || [ -z "$compact" ]
 }
+
+# Strip helper-added chunk headers and failure markers from an analysis file so
+# downstream prompts see only analysis content. hellotalk-llm-call.py inserts
+# "--- Chunk N/M ---" whenever an input exceeds CHUNK_THRESHOLD; no consumer
+# prompt defines those lines, so they must not reach one.
+# Usage: sanitize_analysis_input <src> <dest>
+sanitize_analysis_input() {
+    local src="$1"
+    local dest="$2"
+    awk '!/^--- Chunk [0-9]+[/][0-9]+ ---$/ && !/\[ANALYSIS FAILED/' "$src" > "$dest"
+}
+
+# Fold a label value to a comparison key: lowercase, then drop every byte that
+# is not an ASCII letter or digit. Punctuation is discarded rather than
+# normalized, so the model's curly quotes and non-breaking hyphens compare equal
+# to the straight ASCII a human types into prior-results.txt. Markdown
+# decoration (**, *, #) and trailing spaces fall away for the same reason.
+# Reads stdin, writes stdout.
+normalize_label_key() {
+    tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9\n'
+}

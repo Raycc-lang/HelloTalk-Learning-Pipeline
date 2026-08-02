@@ -9,44 +9,47 @@ CHUNKS_PROMPT="${CHUNKS_PROMPT:-$PROMPT_DIR/anki-generator-semantic.md}"
 LLM_CALL="${LLM_CALL:-$HOME/.local/bin/hellotalk-llm-call.py}"
 HARD_TIMEOUT="${HARD_TIMEOUT:-2400}"
 TSV_RETRY_COUNT="${TSV_RETRY_COUNT:-1}"
-EXPECTED_TABS="${EXPECTED_TABS:-5}"   # 6 fields = 5 tab separators; accept lines with >= this many
+EXPECTED_TABS="${EXPECTED_TABS:-5}"   # 6 fields = exactly 5 tab separators
 LOG_TAG="hellotalk-generate-anki"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [$LOG_TAG] $*"; }
 
-sanitize_analysis_input() {
-    local src="$1"
-    local dest="$2"
+# shellcheck source=/dev/null
+. "$HOME/.local/bin/hellotalk-common.sh"
 
-    # Strip helper-added chunk headers and failure markers so prompts see only analysis content.
-    awk '!/^--- Chunk [0-9]+[/][0-9]+ ---$/ && !/\[ANALYSIS FAILED/' "$src" > "$dest"
-}
-
-# Validate TSV output: keep only lines with >= EXPECTED_TABS tabs.
+# Validate TSV output: keep only lines with exactly EXPECTED_TABS tabs.
 # Returns the number of valid lines written to $2. Rejects blank lines,
-# LLM commentary (0 tabs), and truncated/malformed lines (<5 tabs).
+# LLM commentary (0 tabs), truncated lines (<5 tabs), and lines carrying an
+# extra separator (>5 tabs) — the latter import with every field after the
+# extra tab shifted one column left, which corrupts the card silently rather
+# than failing, so it must be rejected here and not merely counted.
 validate_and_filter_tsv() {
     local src="$1"
     local dest="$2"
     local tabs="$3"
     local valid=0
-    local rejected=0
+    local short=0
+    local long=0
 
     : > "$dest"
     while IFS= read -r line || [ -n "$line" ]; do
         # Skip empty/blank lines
         [ -z "${line//[$' \t']/}" ] && continue
         count=$(printf '%s' "$line" | tr -cd '\t' | wc -c)
-        if [ "$count" -ge "$tabs" ]; then
+        if [ "$count" -eq "$tabs" ]; then
             printf '%s\n' "$line" >> "$dest"
             ((valid++)) || true
+        elif [ "$count" -lt "$tabs" ]; then
+            ((short++)) || true
         else
-            ((rejected++)) || true
+            ((long++)) || true
         fi
     done < "$src"
 
-    if [ "$rejected" -gt 0 ]; then
-        log "  TSV filter: $valid valid, $rejected rejected (< $tabs tabs)"
+    # This log goes to stderr: the caller captures this function's stdout as the
+    # line count, so a log line on stdout would be read back as part of it.
+    if [ "$short" -gt 0 ] || [ "$long" -gt 0 ]; then
+        log "  TSV filter: $valid valid, $short rejected (< $tabs tabs), $long rejected (> $tabs tabs)" >&2
     fi
     echo "$valid"
 }
@@ -59,8 +62,14 @@ mkdir -p "$ANKI_DIR"
 : "${MAX_TOKENS:=131072}"
 export API_BASE API_KEY MODEL MAX_TOKENS PROVIDER
 
-if [ -z "${API_KEY:-}" ]; then
-    log "ERROR: API_KEY not set for PROVIDER=$PROVIDER. Aborting."
+# Multi-model variant generation (no-op unless VARIANTS=1 in the env file).
+# Sourced before the credential check so a slot-only configuration — keys set
+# per slot rather than ambiently — is not rejected before it can be used.
+# shellcheck source=/dev/null
+. "$HOME/.local/bin/hellotalk-variants.sh"
+
+if [ -z "${API_KEY:-}" ] && ! hellotalk_variants_ready; then
+    log "ERROR: API_KEY not set for PROVIDER=$PROVIDER, and no variant slot supplies one. Aborting."
     exit 1
 fi
 
@@ -69,6 +78,9 @@ fi
 hellotalk_quota_check
 
 log "Provider: $PROVIDER  Model: ${MODEL:-<default>}  API: $API_BASE"
+if [ "${VARIANTS:-0}" = "1" ]; then
+    log "Variants: ON — slots [$VARIANT_SLOTS], each deck costs 2 generations + 1 reconciliation."
+fi
 
 declare -a JOBS=()
 [ -s "$GRAMMAR_PROMPT" ] && JOBS+=("grammar|$GRAMMAR_PROMPT|grammar.md|grammar_cards.tsv")
@@ -160,8 +172,8 @@ RETRY_SUFFIX
                 log "  Retry $attempt/$TSV_RETRY_COUNT for $day/$output_name (stricter prompt)..."
             fi
 
-            timeout "$HARD_TIMEOUT" env LLM_CHUNK_HEADERS=0 python3 "$LLM_CALL" \
-                "$current_prompt" "$tmpinput" "$tmpout" || rc=$?
+            LLM_CHUNK_HEADERS=0 VARIANT_OUT_DIR="$day_anki" \
+                hellotalk_generate "$current_prompt" "$tmpinput" "$tmpout" tsv "$day-$job_name" || rc=$?
 
             if [ $rc -eq 0 ] && [ -s "$tmpout" ]; then
                 # Validate and filter TSV output

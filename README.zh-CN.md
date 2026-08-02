@@ -18,6 +18,7 @@
   - [Android（LSPosed 模块）](#androidlsposed-模块)
   - [Linux（流水线主机）](#linux流水线主机)
 - [配置](#配置)
+- [多模型变体生成](#多模型变体生成)
 - [使用](#使用)
   - [手动](#手动)
   - [自动（systemd）](#自动systemd)
@@ -218,6 +219,15 @@ HelloTalk 上的语言学习者每天都会产出大量自发、真实的口语�
 | `CUSTOM_API_BASE` | - | 自定义 OpenAI 兼容端点的 Base URL |
 | `CUSTOM_API_KEY` | - | 自定义端点的 API 密钥 |
 | `MERGE_MIN_LINES` | `80` | 某日 `merged.txt` 独立存在的最小行数；低于此值的稀疏日会被合并到次日 |
+| `VARIANTS` | `0` | 设为 `1` 时每个 artifact 由两个模型分别生成后合并。参见[多模型变体生成](#多模型变体生成) |
+| `VARIANT_SLOTS` | `"PRIMARY SECONDARY"` | 参与生成的模型槽位，按顺序排列。需加引号——该文件也会被 bash source |
+| `<SLOT>_PROVIDER` | 第一个槽位继承 `PROVIDER` | 某个槽位的 provider，例如 `SECONDARY_PROVIDER=nvidia` |
+| `<SLOT>_MODEL` | 第一个槽位继承 `MODEL` | 某个槽位的模型 ID。第一个之后的每个槽位都必须指定 |
+| `<SLOT>_API_BASE` / `<SLOT>_API_KEY` | 各 provider 自身变量 | 每个槽位的凭据覆盖，用于指向不同的端点 |
+| `<SLOT>_REASONING_EFFORT` | `REASONING_EFFORT` | 每个槽位的思考力度 |
+| `JUDGE_PROVIDER` / `JUDGE_MODEL` | 第一个可用槽位 | 用于合并候选结果的模型 |
+| `VARIANT_KEEP` | `1` | 在 finished 文件旁保留 `variants/` 目录下的原始候选 |
+| `VARIANT_MIN_UNIT_PCT` | `50` | 合并后的文件必须保留最丰富候选的条目/卡片/主题数至少此百分比，否则被拒绝 |
 
 > **关于 `MAX_TOKENS`：** 不再全局设置。思考模型会将同样的 token 预算花在内部推理上，设得过小可能导致零可见输出。各脚本各自提供默认值（analyze/drill 为 `131072`，`hellotalk-llm-call.py` 内有 `32768` 兜底）。
 
@@ -227,6 +237,87 @@ HelloTalk 上的语言学习者每天都会产出大量自发、真实的口语�
 - `hellotalk-transcribe.sh` - 需要 NVIDIA gRPC Python 客户端（NVIDIA Riva 示例中的 `transcribe_file_offline.py`）。路径不同请更新 `PYTHON_CLIENT=`。
 - `hellotalk-cleanse.sh` - 从 `~/.config/hellotalk/cleanse.conf` 读取 PII 屏蔽列表。
 - `hellotalk-analyze.sh` - 设置 `MERGE_MIN_LINES`（默认 80）控制稀疏日合并阈值。
+
+---
+
+## 多模型变体生成
+
+两个模型分析同一份转写，找到的错误并不相同。各自会漏掉对方捕捉到的东西，两者的并集始终优于任何一个单独的结果。将 `VARIANTS=1` 设为流水线的默认行为，而不是手动拼凑。
+
+启用后，每个 LLM 阶段会运行三次调用而非一次：
+
+```
+                 ┌── PRIMARY 模型   ──→ variants/<名称>.primary   ─┐
+输入 ────────────┤                                                  ├──→ judge ──→ 最终 artifact
+                 └── SECONDARY 模型 ──→ variants/<名称>.secondary  ─┘
+```
+
+合并步骤本身也是一个 prompt——`prompts/judge-analysis.md`、`judge-tsv.md` 或 `judge-drill.md`，由阶段选择。每个 judge prompt 规定了合并标准而非询问哪个候选"看起来更好"：分析 judge 取真实发现的并集，删除引文不在转写中的条目；TSV judge 合并卡片并修复字段计数损坏；drill judge 选一个连贯的会话作为基础并从其他候选修复。候选内容被包裹在分隔符中并被当作数据处理，因此模型输出中的 stray 指令无法重定向合并过程。
+
+### 设置
+
+在 `~/.config/hellotalk/env` 中配置第二个槽位：
+
+```bash
+VARIANTS=1
+VARIANT_SLOTS="PRIMARY SECONDARY"
+
+PRIMARY_PROVIDER=google
+PRIMARY_MODEL=gemini-3.5-flash
+
+SECONDARY_PROVIDER=nvidia
+SECONDARY_MODEL=moonshotai/kimi-k2.5
+```
+
+只有第一个槽位继承环境配置，因此不设置 `PRIMARY_*` 即可复现普通的单模型设置。之后的每个槽位必须指定自己的模型——两个候选来自同一个模型会共享盲区，因此运行器会检测到重复槽位并跳过，而不是为它付费。
+
+支持两个以上槽位：将 `TERTIARY` 添加到 `VARIANT_SLOTS` 并配置它。所有三个 judge prompt 都支持任意数量的 `CANDIDATE N` 段落，产生的每个候选都会被发送给合并步骤。成本随槽位数加一增长——三个槽位意味着每个 artifact 四次调用。
+
+### 成本与故障行为
+
+每个 artifact 花费三次 API 调用而非一次。`VARIANTS=0` 是默认值，因此自动化的 systemd 运行保持低成本；在输出重要时按调用启用：
+
+```bash
+VARIANTS=1 hellotalk-generate-anki.sh
+```
+
+每种降级路径都保留已付费的内容：
+
+| 情况 | 结果 |
+|------|------|
+| 一个模型失败或超时 | 使用存活的候选，不合并 |
+| 所有模型以相同方式失败 | 保留失败类型——错误的 key 或模型 ID 仍会中止批次，而非在每个 artifact 上重试一次 |
+| 任一生成触及日配额 | 写入配额哨兵，批次中止（exit 75），与之前相同 |
+| 配额在*合并期间*被触发 | 批次中止，artifact 故意不写入。两个已付费候选保留在 `variants/` 中；下次运行时重新生成并正确合并 |
+| 合并返回散文、道歉或坍缩的文件 | 使用第一个*结构上有效*的候选——而非简单地取第一个 |
+| 候选内容太大无法在一次调用中合并 | 先丢弃源材料，然后使用最佳有效候选 |
+| 配置了少于两个不同的模型 | 恰好一次调用——与 `VARIANTS=0` 相同，成本相同 |
+
+合并后的文件只有在看起来仍然像它替代的 artifact 且没有坍缩时才会被接受：它必须保留最丰富候选的条目、卡片或主题数至少 `VARIANT_MIN_UNIT_PCT`（默认 50）百分比。合并会移除重复项，因此标准是百分比而非相等——但一个截断或三十张中只返回两张卡片的 judge 不能覆盖完整的候选。
+
+> **关于配额合并行的说明：** 将未合并的候选提升到最终路径看似有帮助，实则有害。artifact 会比其输入更新，因此 freshness check 会在后续每次运行时跳过那一天，未合并的版本会被永久锁定。留空不写花费一次重新生成，产生正确结果。
+
+原始候选保留在 finished 文件旁的 `variants/` 中，这样你可以比较每个模型产出的内容，以及合并保留了哪些内容。设置 `VARIANT_KEEP=0` 可在合并成功后删除它们。
+
+### 凭据
+
+只有第一个槽位继承环境配置，并且它继承所有内容——`PROVIDER`、`MODEL` 以及直接在 env 文件中设置的任何 `API_BASE` / `API_KEY`。因此为单模型使用配置的代理或自定义端点，在启用变体后仍能正常工作。
+
+凭据也可以完全存在于槽位中，而无需环境密钥：
+
+```bash
+VARIANTS=1
+PRIMARY_PROVIDER=custom
+PRIMARY_MODEL=alpha
+PRIMARY_API_BASE=https://endpoint-a/v1
+PRIMARY_API_KEY=***
+SECONDARY_PROVIDER=custom
+SECONDARY_MODEL=beta
+SECONDARY_API_BASE=https://endpoint-b/v1
+SECONDARY_API_KEY=***
+```
+
+启动时的凭据检查是变体感知的，因此这种配置可以正常启动，而不会因为缺少环境密钥被拒绝。
 
 ---
 
@@ -314,8 +405,10 @@ HelloTalk-Learning-Pipeline/
 │   ├── hellotalk-generate-drill-interactive.sh
 │   ├── hellotalk-generate-drill.sh
 │   ├── hellotalk-generate-anki.sh
+│   ├── hellotalk-anki-interactive.sh
 │   ├── hellotalk-llm-call.py
 │   ├── hellotalk-provider-resolve.sh
+│   ├── hellotalk-variants.sh     # 多模型生成 + 合并
 │   ├── hellotalk-quota-check.sh
 │   ├── hellotalk-cleanup-empty-segments.sh
 │   ├── hellotalk-reset-transcribe.sh
@@ -328,6 +421,9 @@ HelloTalk-Learning-Pipeline/
 │   ├── analysis-semantic.md
 │   ├── anki-generator-grammar.md
 │   ├── anki-generator-semantic.md
+│   ├── judge-analysis.md     # 合并两个分析候选
+│   ├── judge-tsv.md          # 合并两套 Anki 卡片
+│   ├── judge-drill.md        # 合并两个训练会话
 │   └── drill/                # 4/3/2 训练 prompt
 │       ├── grammar-drill-prompt.md
 │       ├── vocabulary-drill-prompt.md

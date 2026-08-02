@@ -18,6 +18,7 @@ Built for intermediate ESL learners whose L1 is Mandarin Chinese, but adaptable 
   - [Android (LSPosed Module)](#android-lsposed-module)
   - [Linux (Pipeline Host)](#linux-pipeline-host)
 - [Configuration](#configuration)
+- [Multi-Model Variant Generation](#multi-model-variant-generation)
 - [Usage](#usage)
   - [Manual](#manual)
   - [Automated (systemd)](#automated-systemd)
@@ -220,6 +221,15 @@ All sensitive configuration lives in `~/.config/hellotalk/env`. The pipeline sup
 | `CUSTOM_API_BASE` | — | Base URL for a custom OpenAI-compatible endpoint |
 | `CUSTOM_API_KEY` | — | API key for the custom endpoint |
 | `MERGE_MIN_LINES` | `80` | Minimum lines for a day's `merged.txt` to stand alone; sparse days are consolidated into the next day |
+| `VARIANTS` | `0` | Set to `1` to generate every artifact with two models and reconcile them. See [Multi-Model Variant Generation](#multi-model-variant-generation) |
+| `VARIANT_SLOTS` | `"PRIMARY SECONDARY"` | Which model slots take part, in order. Quote the value — the file is also sourced by bash |
+| `<SLOT>_PROVIDER` | first slot inherits `PROVIDER` | Provider for one slot, e.g. `SECONDARY_PROVIDER=nvidia` |
+| `<SLOT>_MODEL` | first slot inherits `MODEL` | Model ID for one slot. Required on every slot after the first |
+| `<SLOT>_API_BASE` / `<SLOT>_API_KEY` | provider's own vars | Per-slot credential override, for pointing a slot at a different endpoint |
+| `<SLOT>_REASONING_EFFORT` | `REASONING_EFFORT` | Per-slot thinking effort |
+| `JUDGE_PROVIDER` / `JUDGE_MODEL` | first usable slot | Which model reconciles the candidates |
+| `VARIANT_KEEP` | `1` | Keep the raw candidates under `variants/` beside the finished file |
+| `VARIANT_MIN_UNIT_PCT` | `50` | Minimum percent of the richest candidate's entry/card/topic count a reconciled file must retain to be accepted |
 
 > **Note on `MAX_TOKENS`:** it is no longer set globally. Thinking models spend the same token budget on internal reasoning, so a small cap can yield zero visible output. Each script supplies its own default instead (`131072` for analyze/drill, with a `32768` fallback inside `hellotalk-llm-call.py`).
 
@@ -229,6 +239,120 @@ All sensitive configuration lives in `~/.config/hellotalk/env`. The pipeline sup
 - `hellotalk-transcribe.sh` — Requires the NVIDIA gRPC Python client (`transcribe_file_offline.py` from NVIDIA's Riva samples). Update `PYTHON_CLIENT=` if your path differs.
 - `hellotalk-cleanse.sh` — Reads `~/.config/hellotalk/cleanse.conf` for PII blocklist patterns.
 - `hellotalk-analyze.sh` — Set `MERGE_MIN_LINES` (default: 80) to control the sparse-day consolidation threshold.
+
+---
+
+## Multi-Model Variant Generation
+
+Two models asked to analyze the same transcript do not find the same errors. Each
+misses things the other catches, and the union is consistently better than either
+alone. Setting `VARIANTS=1` makes that the pipeline's behavior instead of something
+you assemble by hand.
+
+With it enabled, every LLM stage runs three calls instead of one:
+
+```
+                 ┌── PRIMARY model   ──→ variants/<name>.primary   ─┐
+input ───────────┤                                                  ├──→ judge ──→ final artifact
+                 └── SECONDARY model ──→ variants/<name>.secondary  ─┘
+```
+
+The reconciliation step is itself a prompt — `prompts/judge-analysis.md`,
+`judge-tsv.md` or `judge-drill.md`, picked by stage. Each one names the criteria
+to merge on rather than asking which candidate "looks better": the analysis judge
+takes the union of genuine findings and drops any whose quoted words are absent
+from the transcript, the TSV judge merges cards and repairs field-count damage,
+and the drill judge picks one coherent session as a base and repairs it from the
+other. Candidates arrive inside delimiters and are treated as data, so a stray
+instruction inside model output cannot redirect the merge.
+
+### Setup
+
+Configure a second slot in `~/.config/hellotalk/env`:
+
+```bash
+VARIANTS=1
+VARIANT_SLOTS="PRIMARY SECONDARY"
+
+PRIMARY_PROVIDER=google
+PRIMARY_MODEL=gemini-3.5-flash
+
+SECONDARY_PROVIDER=nvidia
+SECONDARY_MODEL=moonshotai/kimi-k2.5
+```
+
+Only the first slot inherits the ambient configuration, so leaving `PRIMARY_*`
+unset reproduces the ordinary single-model setup. Every later slot must name its
+own model — two candidates drawn from one model share their blind spots, so the
+runner detects a duplicate slot and skips it rather than paying for it.
+
+More than two slots work: add `TERTIARY` to `VARIANT_SLOTS` and configure it. All
+three judge prompts are written for an arbitrary number of `CANDIDATE N` sections,
+and every candidate produced is sent to reconciliation. Cost scales with slot
+count plus one — three slots means four calls per artifact.
+
+### Cost and failure behavior
+
+Each artifact costs three API calls instead of one. `VARIANTS=0` is the default so
+the automated systemd runs stay cheap; turn it on per-invocation when the output
+matters:
+
+```bash
+VARIANTS=1 hellotalk-generate-anki.sh
+```
+
+Every degradation path keeps whatever was already paid for:
+
+| What happens | Result |
+|---|---|
+| One model fails or times out | The surviving candidate is used unreconciled |
+| Every model fails the same way | The failure class is preserved — a bad key or model ID still aborts the batch instead of being retried once per artifact |
+| Any generation hits its daily quota | Quota sentinel written, batch aborts (exit 75), as before |
+| Quota is hit *during* reconciliation | Batch aborts, and the artifact is deliberately left unwritten. Both paid candidates stay in `variants/`; the next run regenerates and reconciles them properly |
+| Reconciliation returns prose, an apology, or a collapsed file | The best *structurally valid* candidate is used — not simply the first |
+| Candidates too large to reconcile in one call | Source material is dropped first, then the best valid candidate is used |
+| Fewer than two distinct models configured | Exactly one call — identical to `VARIANTS=0`, same cost |
+
+A reconciled file is accepted only if it still looks like the artifact it replaces
+and did not collapse: it must retain at least `VARIANT_MIN_UNIT_PCT` (default 50)
+percent of the entry, card, or topic count of the richest candidate. Merging
+removes duplicates, so the bar is a fraction rather than parity — but a judge that
+truncates, or returns two cards out of thirty, cannot overwrite a complete
+candidate.
+
+> **On the quota-during-reconciliation row:** promoting an unreconciled candidate
+> to the final path would look helpful and be harmful. The artifact would then be
+> newer than its input, so the freshness check would skip that day on every later
+> run and the unreconciled version would be locked in permanently. Leaving it
+> unwritten costs one regeneration and produces the correct result.
+
+Raw candidates stay in `variants/` next to the finished file, so you can compare
+what each model produced and see what the merge kept. Set `VARIANT_KEEP=0` to
+delete them once reconciliation succeeds.
+
+### Credentials
+
+Only the first slot inherits the ambient configuration, and it inherits all of it
+— `PROVIDER`, `MODEL`, and any `API_BASE` / `API_KEY` set directly in the env
+file. A proxy or custom endpoint configured for single-model use therefore keeps
+working unchanged when variants are switched on.
+
+Credentials may also live entirely in the slots, with no ambient key at all:
+
+```bash
+VARIANTS=1
+PRIMARY_PROVIDER=custom
+PRIMARY_MODEL=alpha
+PRIMARY_API_BASE=https://endpoint-a/v1
+PRIMARY_API_KEY=...
+SECONDARY_PROVIDER=custom
+SECONDARY_MODEL=beta
+SECONDARY_API_BASE=https://endpoint-b/v1
+SECONDARY_API_KEY=...
+```
+
+The startup credential check is variant-aware, so this configuration starts
+normally rather than being rejected for a missing ambient key.
 
 ---
 
@@ -316,8 +440,10 @@ HelloTalk-Learning-Pipeline/
 │   ├── hellotalk-generate-drill-interactive.sh
 │   ├── hellotalk-generate-drill.sh
 │   ├── hellotalk-generate-anki.sh
+│   ├── hellotalk-anki-interactive.sh
 │   ├── hellotalk-llm-call.py
 │   ├── hellotalk-provider-resolve.sh
+│   ├── hellotalk-variants.sh     # multi-model generation + reconciliation
 │   ├── hellotalk-quota-check.sh
 │   ├── hellotalk-cleanup-empty-segments.sh
 │   ├── hellotalk-reset-transcribe.sh
@@ -330,6 +456,9 @@ HelloTalk-Learning-Pipeline/
 │   ├── analysis-semantic.md
 │   ├── anki-generator-grammar.md
 │   ├── anki-generator-semantic.md
+│   ├── judge-analysis.md     # reconciles two analysis candidates
+│   ├── judge-tsv.md          # reconciles two Anki card sets
+│   ├── judge-drill.md        # reconciles two drill sessions
 │   └── drill/                # 4/3/2 drill prompts
 │       ├── grammar-drill-prompt.md
 │       ├── vocabulary-drill-prompt.md

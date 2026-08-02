@@ -25,9 +25,38 @@ export REASONING_EFFORT
 
 log() { echo "  $(date '+%H:%M:%S') $*"; }
 
-sanitize_analysis_input() {
-    local src="$1" dest="$2"
-    awk '!/^--- Chunk [0-9]+[/][0-9]+ ---$/ && !/\[ANALYSIS FAILED/' "$src" > "$dest"
+# shellcheck source=/dev/null
+. "$HOME/.local/bin/hellotalk-common.sh"
+
+EXPECTED_TABS="${EXPECTED_TABS:-5}"   # 6 fields = exactly 5 tab separators
+
+# Keep only lines with exactly EXPECTED_TABS tabs, mirroring the batch script.
+# A line with an extra tab imports with every later field shifted one column,
+# corrupting the card without any error — reject rather than pass it through.
+validate_and_filter_tsv() {
+    local src="$1" dest="$2" tabs="$3"
+    local valid=0 short=0 long=0 count line
+
+    : > "$dest"
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -z "${line//[$' \t']/}" ] && continue
+        count=$(printf '%s' "$line" | tr -cd '\t' | wc -c)
+        if [ "$count" -eq "$tabs" ]; then
+            printf '%s\n' "$line" >> "$dest"
+            ((valid++)) || true
+        elif [ "$count" -lt "$tabs" ]; then
+            ((short++)) || true
+        else
+            ((long++)) || true
+        fi
+    done < "$src"
+
+    # This log goes to stderr: the caller captures this function's stdout as the
+    # line count, so a log line on stdout would be read back as part of it.
+    if [ "$short" -gt 0 ] || [ "$long" -gt 0 ]; then
+        log "TSV filter: $valid valid, $short rejected (< $tabs tabs), $long rejected (> $tabs tabs)" >&2
+    fi
+    echo "$valid"
 }
 
 # ── Resolve provider ────────────────────────────────────────────────────
@@ -288,10 +317,18 @@ for day in "${SELECTED_DAYS[@]}"; do
 
         if [ $rc -eq 0 ]; then
             if [ -s "$tmpout" ]; then
-                mv "$tmpout" "$out"
-                lines=$(wc -l < "$out")
-                log "[$day/$jtype] Done — ${lines} card(s) in ${elapsed}s"
-                ((generated++)) || true
+                tmpvalidated=$(mktemp)
+                lines=$(validate_and_filter_tsv "$tmpout" "$tmpvalidated" "$EXPECTED_TABS")
+                rm -f "$tmpout"
+                if [ "$lines" -gt 0 ]; then
+                    mv "$tmpvalidated" "$out"
+                    log "[$day/$jtype] Done — ${lines} card(s) in ${elapsed}s"
+                    ((generated++)) || true
+                else
+                    rm -f "$tmpvalidated"
+                    log "[$day/$jtype] Failed — every line rejected by the TSV filter."
+                    ((failed++)) || true
+                fi
             else
                 rm -f "$tmpout"
                 log "[$day/$jtype] Failed — empty response."

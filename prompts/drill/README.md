@@ -28,7 +28,9 @@ At runtime these three prompt files are copied to `~/Android/HelloTalkCapture/Dr
 
 ## Usage
 
-1. Run `transcript-regenerator-prompt.md` with the date's `merged.txt` + `grammar.md` + `semantic.md` to get a clean transcript.
+1. **Optional, and manual — no script runs this.** Run `transcript-regenerator-prompt.md` with the date's `merged.txt` + `grammar.md` + `semantic.md` to get a clean transcript, and save the result as `Drill/sessions/<date>/cleaned-transcript.md`. That exact path is the only one the drill scripts look for; anywhere else and they silently fall back to the raw ASR text in `merged.txt`.
 2. Run `grammar-drill-prompt.md` with the date's `grammar.md` (and optionally the clean transcript) — output goes to `Drill/sessions/<date>/grammar-drill.md`.
 3. Run `vocabulary-drill-prompt.md` with the date's `semantic.md` (and optionally the clean transcript) — output goes to `Drill/sessions/<date>/vocabulary-drill.md`.
 4. Do the drill: read the skeleton once, then perform the 4/3/2 timed retellings.
+
+Steps 2 and 3 are what `hellotalk-generate-drill.sh` and `hellotalk-generate-drill-interactive.sh` automate. Step 1 is not wired into either script, so the drills are built from raw ASR text unless you run it by hand first. The `[E]`/`[I]` evidence tags in the generated skeleton are only as reliable as the transcript underneath them.

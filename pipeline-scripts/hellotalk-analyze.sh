@@ -28,8 +28,14 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [$LOG_TAG] $*"; }
 
 mkdir -p "$ANALYSIS_DIR"
 
-if [ -z "${API_KEY:-}" ]; then
-    log "ERROR: API_KEY not set for PROVIDER=$PROVIDER. Aborting."
+# Multi-model variant generation (no-op unless VARIANTS=1 in the env file).
+# Sourced before the credential check so a slot-only configuration — keys set
+# per slot rather than ambiently — is not rejected before it can be used.
+# shellcheck source=/dev/null
+. "$HOME/.local/bin/hellotalk-variants.sh"
+
+if [ -z "${API_KEY:-}" ] && ! hellotalk_variants_ready; then
+    log "ERROR: API_KEY not set for PROVIDER=$PROVIDER, and no variant slot supplies one. Aborting."
     exit 1
 fi
 
@@ -38,6 +44,9 @@ fi
 hellotalk_quota_check
 
 log "Provider: $PROVIDER  Model: $MODEL  Reasoning: ${REASONING_EFFORT:-provider-default}  API: $API_BASE"
+if [ "${VARIANTS:-0}" = "1" ]; then
+    log "Variants: ON — slots [$VARIANT_SLOTS], each artifact costs 2 generations + 1 reconciliation."
+fi
 
 # ── Collect prompt files that exist and are non-empty ────────────────
 declare -A PROMPTS
@@ -248,8 +257,8 @@ for day_dir in "$ANALYSIS_DIR"/????-??-??; do
 
         tmpout=$(mktemp)
         rc=0
-        timeout "$timeout_secs" python3 "$HOME/.local/bin/hellotalk-llm-call.py" \
-            "$prompt_file" "$merged" "$tmpout" || rc=$?
+        HARD_TIMEOUT="$timeout_secs" VARIANT_OUT_DIR="$day_dir" \
+            hellotalk_generate "$prompt_file" "$merged" "$tmpout" analysis "$day-$prompt_name" || rc=$?
 
         if [ $rc -eq 0 ]; then
             if [ -s "$tmpout" ]; then
