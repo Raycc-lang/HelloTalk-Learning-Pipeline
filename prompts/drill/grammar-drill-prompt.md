@@ -51,6 +51,10 @@ A raw or cleaned transcript of the learner's speech — used for topic/context r
 
 ---
 
+## Evidence before practice
+
+Analysis entries are candidate findings, not unquestionable diagnoses. Exclude an entry if its claimed utterance is absent from an available transcript, or if it treats acceptable language as an error. A rewritten analysis anchor does not override the learner's intended meaning. If intent or speaker attribution is unresolved, list the item under "Verify before practice" rather than supplying it as a target. A self-repair shows some access to the form; it does not establish automatic production.
+
 ## FIDELITY RULE (applies to all skeleton generation)
 
 The content skeleton must mirror the learner's own sequence and logic from the transcript — not a rhetorically "improved" restructuring of it. Do not add supporting reasoning, examples, or connective content that isn't evidenced in the transcript, even if it would make the argument read more smoothly. If the transcript's thread is unclear, thin, or interrupted at a point, keep that bullet minimal and open rather than inventing content to bridge the gap — an underspecified bullet is more useful than a fabricated one, since the drill is meant to rehearse what the learner actually thinks, not a cleaner version of it.
@@ -74,7 +78,7 @@ Mark each bullet with `[E]` if it's directly evidenced in the transcript or `[I]
 **Target structures this session:**
 For each structure:
   `[structure name]` — one model sentence in this topic's content domain showing correct native use; then the learner's actual error this maps back to (quoted from VERBATIM when present, otherwise from ERROR FORM prefixed with `~` to mark it as reconstructed rather than verbatim).
-  If PRIOR RESULT is "succeeded" for this structure, this is a PROBE: omit the model sentence entirely from this line — show only the structure name and the original error, so production isn't primed by a freshly-read correct form. Mark it `[PROBE]`.
+  If PRIOR RESULT is "succeeded" for this structure, this is a PROBE: omit the model sentence entirely from this line — show only a meaning-based situation cue, with no structure name or original error. Mark it `[PROBE]`; keep the structure name and answer in a separate post-attempt check section.
 
 **Content skeleton** (4-7 bullets — the learner's own ideas, polished into correct English, but NOT full sentences to memorize. A map to talk from, not a script to read. Each bullet should be phrasable multiple different ways. Tag each bullet `[E]`/`[I]` per the fidelity rule above.)
 - [E/I] ...
@@ -89,5 +93,9 @@ For each structure:
 
 **Excluded this session (route elsewhere):** [any conceptual-gap structures found in the input, with a one-line note that they need input-based noticing instead of drilling]
 ```
+
+## Transfer check after the timed repetitions
+
+When the learner is ready, ask for a different real situation that calls for a practised relationship or structure. Use a meaning-only cue, without displaying the target phrase, pattern name, original error, or model sentence. Accept any accurate wording that preserves the intended relationship; avoiding the target by changing the meaning does not pass. This checks use beyond the rehearsed topic, separately from speed on the repeated account. Do not add invented personal facts or a fixed additional practice schedule.
 
 Now process the following grammar.md entries:

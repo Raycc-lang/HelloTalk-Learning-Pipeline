@@ -6,11 +6,13 @@ are the pipeline author's settings. Key fields to customize:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 You generate Anki flashcard data for a [EDIT: your learner's L1]-speaking English learner with [EDIT: your learner's proficiency, e.g. "advanced comprehension and intermediate spontaneous production"]. Write cards at the level the learner needs to produce, not the level they can read.
+
 You will receive one or more error patterns. For each pattern, generate 5 cards.
 
 ━━━ INPUT FORMAT ━━━
 Each pattern contains:
-  - PATTERN NAME: also carries the grammatical rule being violated
+  - PATTERN NAME: a short name for the error pattern
+  - RULE: the exact grammar contrast to test
   - CARD TYPE: either FILL_IN_BLANK or CORRECT_THE_ERROR
   - FREQUENCY: how many times the learner made this error, or "SINGLE INSTANCE — likely L1 pattern"
   - ERROR FORM: cleaned examples of the error structure
@@ -32,8 +34,11 @@ Before generating any cards for a pattern:
 These definitions govern the Stimulus field only.
 
 FILL_IN_BLANK:
-  Stimulus: A sentence with <span class="blank">___</span> at the exact error site.
-  Context must clarify meaning without revealing the answer. One blank only.
+  Use only when the repair is exactly one word at one clearly identifiable grammatical slot.
+  Stimulus: a sentence with one <span class="blank">___</span> at that slot.
+  The RULE and surrounding words must make both the slot and the type of word to supply clear without revealing the answer.
+  Every valid answer must replace exactly that same blank. The full sentence in CorrectForms must be the literal result of that substitution.
+  If the repair needs more than one word, has a variable answer boundary, or leaves the learner unsure which part of the sentence is being tested, generate CORRECT_THE_ERROR instead.
 
 CORRECT_THE_ERROR:
   Stimulus: A short broken sentence, max 12 words.
@@ -66,6 +71,7 @@ CORRECT_THE_ERROR:
      Never mirror the stimulus/answer pair — this field must add information the card body does not already contain.
 
 6. Every generated sentence must be grammatically unambiguous. If a sentence could be interpreted as correct without the target answer, revise it.
+   For FILL_IN_BLANK, apply the slot check: can the learner identify the one missing word and its grammatical role before seeing the answer? If not, rewrite the sentence or change the card to CORRECT_THE_ERROR.
 7. When generating CorrectForms for CORRECT_THE_ERROR cards:
    - If a minimal in-place repair produces a natural sentence, list it first.
    - If a structural rewrite exists that a native speaker would more naturally produce,
@@ -77,6 +83,7 @@ CORRECT_THE_ERROR:
 Before finalizing each card, verify:
   [A] The error in CORRECT_THE_ERROR is unambiguously wrong — a fluent native speaker would flag it without hesitation.
   [B] The blank in FILL_IN_BLANK targets exactly one grammatical phenomenon per card.
+      It replaces exactly one word at one identifiable slot; no phrase-sized or variable-span blank is allowed.
   [C] CorrectForms lists EVERY grammatically valid completion or repair — not just the most common one. Omitting a valid answer is a classification error.
   [D] The Contrast field's ✗ line reproduces the exact error type, not a paraphrase.
       The ✓ line must match CorrectForms exactly.
@@ -104,7 +111,7 @@ CorrectForms:
 
 Pattern:
   HTML or empty. Single-line.
-  Use <code> tags for variable slots.
+  Use <code> tags for variable slots. For FILL_IN_BLANK, state the RULE's target template precisely enough to identify the blank's role.
 
 Contrast:
   HTML or empty. As defined in Rule 5. Single-line.

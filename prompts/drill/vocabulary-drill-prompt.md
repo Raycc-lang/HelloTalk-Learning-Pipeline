@@ -52,6 +52,10 @@ A raw or cleaned transcript of the learner's speech — used for topic/context r
 
 ---
 
+## Evidence before practice
+
+Analysis entries are candidate findings, not unquestionable diagnoses. Exclude an entry if its claimed utterance is absent from an available transcript, or if it treats acceptable language as an error. A rewritten analysis anchor does not override the learner's intended meaning. If intent or speaker attribution is unresolved, list the item under "Verify before practice" rather than supplying it as a target. A self-repair shows some access to the form; it does not establish automatic production.
+
 ## FIDELITY RULE (applies to all skeleton generation)
 
 The content skeleton must mirror the learner's own sequence and logic from the transcript — not a rhetorically "improved" restructuring of it. Do not add supporting reasoning, examples, or connective content that isn't evidenced in the transcript, even if it would make the argument read more smoothly. If the transcript's thread is unclear, thin, or interrupted at a point, keep that bullet minimal and open rather than inventing content to bridge the gap — an underspecified bullet is more useful than a fabricated one, since the drill is meant to rehearse what the learner actually thinks, not a cleaner version of it.
@@ -62,9 +66,9 @@ Mark each bullet with `[E]` if it's directly evidenced in the transcript or `[I]
 
 ## STEP 1 — CONFIDENCE CHECK
 
-Every semantic.md entry, by construction, requires the learner to have produced an actual attempt — a wrong word, a near-hit collocation, or a plain-but-correct alternative to an idiom. All three presuppose some existing access to the concept. Drill every entry; there is no case in this schema representing total absence, so don't try to route anything elsewhere on that basis.
+Every semantic.md entry, by construction, requires the learner to have produced an actual attempt — a wrong word, a near-hit collocation, or a plain-but-correct alternative to an idiom. All three presuppose some existing access to the concept. A prior attempt does not prove that the English concept boundary is correct. Drill an entry only after its intended meaning and proposed expression have been checked; if the distinction is still unclear, route it to the expression partner for clarification first.
 
-The only field worth checking is CONFIDENCE. If an entry is marked LOW, don't exclude it — flag it inline in the output (see Step 3) so the learner can verify before drilling rather than the model silently deciding either way. Do the same for a MEDIUM entry that carries an UNCERTAIN line; a MEDIUM with no UNCERTAIN line needs no flag.
+Check both source support and CONFIDENCE. Put LOW-confidence entries, and MEDIUM entries with an UNCERTAIN line, under "Verify before practice" and leave them out of the timed targets until the learner resolves the uncertainty. HIGH confidence does not override contrary source evidence.
 
 ## STEP 2 — TOPIC SELECTION (1-3 topics per run, fewer is fine)
 
@@ -80,7 +84,7 @@ The only field worth checking is CONFIDENCE. If an entry is marked LOW, don't ex
 **Source context:** [1-2 sentences — what the learner was actually trying to say, reconstructed from the semantic entries and transcript. Not invented.]
 
 **Target chunks this session:**
-For each: `[chunk]` — one model sentence in this topic's domain; the learner's actual original attempt this maps back to (quoted from VERBATIM when present, otherwise from ORIGINAL PHRASE prefixed with `~` to mark it as reconstructed rather than verbatim), if one exists. If CONFIDENCE is LOW, or MEDIUM with an UNCERTAIN line, append "(low confidence — verify before drilling: [the UNCERTAIN reason])".
+For each: `[chunk]` — one model sentence in this topic's domain; the learner's actual original attempt this maps back to (quoted from VERBATIM when present, otherwise from ORIGINAL PHRASE prefixed with `~` to mark it as reconstructed rather than verbatim), if one exists. Do not include unresolved entries here; list them separately under "Verify before practice" with the uncertainty to resolve.
 
 **Content skeleton** (4-7 bullets — the learner's own ideas, polished, phrased so that each bullet plausibly calls for one or more target chunks. NOT full sentences to memorize — a map to talk from, not a script to read. Tag each bullet `[E]`/`[I]` per the fidelity rule above.)
 For each bullet, optionally include up to 2 framing alternatives — different ways to lead into or frame the same idea, varying only the surrounding phrasing, never the target chunk itself. These are for the pre-drill read-through only, not a menu to consult mid-round — read once, then put away before timing starts, same as the skeleton and target list.
@@ -94,7 +98,11 @@ For each bullet, optionally include up to 2 framing alternatives — different w
 2. Talk through the topic freely for 4 minutes, aiming to use each target chunk at least once, in your own words.
 3. Immediately retell the same content in 3 minutes.
 4. Immediately retell again in 2 minutes.
-5. Afterward, check which chunks you actually produced across the three tellings, and where you substituted something weaker instead.
+5. Afterward, check which chunks you actually produced across the three tellings, and whether your wording preserved the intended meaning; an equally accurate alternative is not a failure.
 ```
+
+## Transfer check after the timed repetitions
+
+When the learner is ready, ask for a different real situation that calls for a practised relationship or structure. Use a meaning-only cue, without displaying the target phrase, pattern name, original error, or model sentence. Accept any accurate wording that preserves the intended relationship; avoiding the target by changing the meaning does not pass. This checks use beyond the rehearsed topic, separately from speed on the repeated account. Do not add invented personal facts or a fixed additional practice schedule.
 
 Now process the following semantic.md entries:

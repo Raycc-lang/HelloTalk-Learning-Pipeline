@@ -18,12 +18,19 @@ Transcript notes:
   Lines beginning `# ──` and lines of the form `--- Chunk 1/3 ---` are pipeline markers, not learner speech. Ignore them completely: never quote them, count them as utterances, or treat them as a topic boundary.
   Some words may be misheard by the STT model. If a flagged word could plausibly be an STT substitution for a different intended word (rather than a genuine lexical choice), set CONFIDENCE to LOW and say so in UNCERTAIN — unless the substitution fully explains the "error," in which case skip it.
   Garbled or clearly non-word STT output: skip unless the surrounding context makes the intended word recoverable with HIGH confidence.
-  Self-corrections mid-utterance: analyze the first (uncorrected) attempt only, unless the correction itself introduces a new error.
+  Self-corrections: retain both the initial attempt and its repair in VERBATIM when the finding otherwise qualifies. An immediate successful repair is evidence of available knowledge, not proof of mastery or ignorance; mention it in the explanation. Do not treat abandoned restarts as completed constructions.
 
 Known patterns to skip — under active remediation, do not flag [EDIT: customize for your learner]:
   Gender pronoun mismatches (he/she/they)
   Overuse of "I think," "so," "but," "I mean" as fillers
   Sentence restarts and repetition loops
+
+━━━ SOURCE AND JUDGMENT CHECK ━━━
+Analyze only speech attributable to the learner in the supplied transcript. Skip quoted/read-aloud examples and clearly identifiable recorded media; do not infer speaker identity from fluent English alone. Skip an uncertain span when attributing it to the learner would determine the finding.
+If the input is empty, contains only pipeline markers, or contains no assessable learner speech, output exactly: NO ASSESSABLE LEARNER SPEECH. Do not invent examples.
+Every VERBATIM entry must be a contiguous excerpt copied from the supplied transcript, preserving its words and self-repairs. Put explanations and reconstructed forms in their own fields, never inside VERBATIM. No ellipsis joining separate spans. Do not quote examples from these instructions as learner speech.
+For a real transcript with no qualifying findings, output exactly: NO QUALIFYING FINDINGS.
+An alternative expression is not proof of an error. Preserve the learner's intended claim, certainty, directness, and emotional stance. Do not infer an L1 cause, a missing grammar rule, or a general proficiency deficit from the error alone. Say when a judgment depends on uncertain intention or ASR; omit findings that are fully explained by transcription or an acceptable reading.
 
 ━━━ YOUR TASK ━━━
 Identify places where a native speaker would use a different word, phrase, or fixed expression — more natural, more precise, more idiomatic, or better matched to the situation.
@@ -45,7 +52,7 @@ MISSED IDIOMATIC PHRASING
   Trigger: The learner's phrase is a valid paraphrase, but not the idiomatic default.
   Narrow the trigger to: the fixed expression is cross-register (natural in both formal writing and casual speech), high-frequency, and has no valid paraphrase that a native speaker would equally accept in this context. If the target expression is register-restricted, use REGISTER MISMATCH instead. If the learner's phrasing is optionally native, do not flag at all.
 
-  Example (flag): Learner says "I haven't decided yet what to do." → This is fine on its own — only flag if context shows the learner is clearly wavering ("I keep changing my mind"), where "make up my mind" is the unmarked default and "decide" reads as slightly flat. Include such contextual reasoning in NOTE.
+  Example (do NOT flag): "I keep changing my mind; I really cannot decide." is acceptable. "Make up my mind" is an optional alternative, not a required correction. Wavering alone does not make "decide" wrong.
 
   Example (do NOT flag): Learner says "It's raining heavily." → "It's pouring" is an available idiom, but "raining heavily" is an equally natural, unmarked paraphrase — no flag.
 
@@ -61,13 +68,15 @@ REGISTER MISMATCH
   Example (flag): "I shall endeavor to arrive punctually" in a casual chat about meeting a friend → "I'll try to be on time."
   Exclude if: the learner is deliberately quoting, joking, or reporting written language, or the setting genuinely calls for that formality.
 
+Before flagging a semantic boundary, check ordinary figurative meanings: "see" can mean understand or recognize, so an auditory topic does not by itself make "see the difference" wrong. Do not turn an optional idiom into a correction, or replace a strong/emotional stance with a gentler one without evidence of the intended meaning. Where a qualifying finding was self-corrected, retain the repair and acknowledge it in NOTE.
+
 ━━ DISAMBIGUATION ━━━
 Apply these tests in order; the first one that fires decides the sub-type.
 1. Is the flagged word's English meaning itself wrong — it does not denote the intended concept at all? → SEMANTIC BOUNDARY ERROR.
 2. Is the meaning right in isolation, but the word does not conventionally pair with its neighbors? → NEAR-MISS COLLOCATION.
    Test: does the flagged word, used with a different partner, correctly express the intended meaning? If yes, this is a collocation issue; if no, it is a semantic boundary issue.
 3. Is the phrasing correct and conventional, but at the wrong formality level for the setting? → REGISTER MISMATCH.
-4. Is the phrasing correct, conventional, and register-appropriate, but not the expression a native speaker would default to? → MISSED IDIOMATIC PHRASING.
+4. Is there a context-specific conventional-expression requirement that the phrasing misses, satisfying the narrow trigger above? → MISSED IDIOMATIC PHRASING. If the alternative is merely preferable to some speakers, omit the finding.
 
 ━━━ OUTPUT FORMAT ━━━
 Structure each item so it can be pasted directly as input to the card generation prompt.
