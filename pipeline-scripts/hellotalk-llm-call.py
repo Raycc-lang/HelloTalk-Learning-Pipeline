@@ -118,11 +118,12 @@ QUOTA_RE = re.compile("|".join(QUOTA_PATTERNS), re.IGNORECASE)
 
 def classify_error(exc):
     """Return ('transient'|'quota_daily'|'quota_rate'|'fatal', detail_str)."""
-    import httpx
+    import httpx, openai
 
     # Network-level → transient
     if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError,
-                        httpx.RemoteProtocolError, ConnectionError, OSError)):
+                        httpx.RemoteProtocolError, ConnectionError, OSError,
+                        openai.APIConnectionError)):
         return "transient", str(exc)
 
     status = getattr(exc, "status_code", None)
@@ -463,6 +464,10 @@ def cache_probe(prompt_file, input_file):
     with open(input_file) as f:
         input_text = f.read()
 
+    if not system_prompt.strip() or not input_text.strip():
+        log("[refusing empty prompt/input before cache probe]")
+        return 1
+
     if len(input_text) > CHUNK_THRESHOLD:
         input_text = input_text[:CHUNK_THRESHOLD]
         log(f"[probe: input truncated to {CHUNK_THRESHOLD} chars]")
@@ -542,6 +547,10 @@ def main():
         system_prompt = f.read()
     with open(input_file) as f:
         input_text = f.read()
+
+    if not system_prompt.strip() or not input_text.strip():
+        log("[refusing empty prompt/input before API call]")
+        sys.exit(1)
 
     chunks = split_text(input_text, CHUNK_THRESHOLD)
     total = len(chunks)

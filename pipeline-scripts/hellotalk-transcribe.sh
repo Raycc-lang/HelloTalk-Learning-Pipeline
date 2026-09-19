@@ -40,13 +40,22 @@ if [ -z "${NVIDIA_API_KEY:-}" ]; then
     exit 1
 fi
 
-PYTHON_CLIENT="$HOME/Android/hellotalk_analysis/python-clients/scripts/asr/transcribe_file_offline.py"
+PYTHON_CLIENT_CACHE="$HOME/.cache/hellotalk/transcribe_file_offline.py"
+PYTHON_CLIENT_URL="https://raw.githubusercontent.com/nvidia-riva/python-clients/main/scripts/asr/transcribe_file_offline.py"
+PYTHON_CLIENT="${PYTHON_CLIENT:-$PYTHON_CLIENT_CACHE}"
 NVIDIA_SERVER="grpc.nvcf.nvidia.com:443"
 NVIDIA_FUNCTION_ID="b702f636-f60c-4a3d-a6f4-f3568c13bd7d"
 
 if [ ! -f "$PYTHON_CLIENT" ]; then
-    log "ERROR: NVIDIA client not found at $PYTHON_CLIENT"
-    exit 1
+    log "NVIDIA client not found at $PYTHON_CLIENT; downloading from upstream..."
+    mkdir -p "$(dirname "$PYTHON_CLIENT")"
+    if curl -fsSL --connect-timeout 15 "$PYTHON_CLIENT_URL" -o "$PYTHON_CLIENT"; then
+        chmod +x "$PYTHON_CLIENT"
+        log "Downloaded Riva client to $PYTHON_CLIENT"
+    else
+        log "ERROR: failed to download Riva client from $PYTHON_CLIENT_URL"
+        exit 1
+    fi
 fi
 
 # ── Retry and failure classification ────────────────────────────────

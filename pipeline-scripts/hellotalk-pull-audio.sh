@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ADB="/usr/bin/adb"
-DEVICE="192.168.1.13:5555"
+DEVICE="${DEVICE:-}"                          # allow env override
 REMOTE_DIR="/data/data/com.hellotalk/files/HelloTalkCapture"
 STAGING_DIR="/sdcard/HelloTalkCapture"
 LOCAL_DIR="$HOME/Android/HelloTalkCapture/Original_audio"
@@ -13,14 +13,27 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [$LOG_TAG] $*"; }
 # Ensure local destination exists
 mkdir -p "$LOCAL_DIR"
 
+# Resolve device dynamically: use any already-connected network ADB device,
+# otherwise fall back to the auto-connect script's discovery.
+if [ -z "$DEVICE" ]; then
+    DEVICE=$($ADB devices 2>/dev/null | awk -F'\t' '$2=="device" && $1 ~ /:5555$/ {print $1; exit}')
+fi
+if [ -z "$DEVICE" ]; then
+    log "No connected ADB device; running adb-auto-connect..."
+    "$HOME/.local/bin/adb-auto-connect.sh" >/dev/null 2>&1 || true
+    DEVICE=$($ADB devices 2>/dev/null | awk -F'\t' '$2=="device" && $1 ~ /:5555$/ {print $1; exit}')
+fi
+
 # Connect to device (wireless ADB needs reconnect after reboot)
-log "Connecting to device $DEVICE..."
-$ADB connect "$DEVICE" 2>&1 | grep -v "already connected" || true
-sleep 1
+if [ -n "$DEVICE" ]; then
+    log "Using device $DEVICE"
+    $ADB connect "$DEVICE" 2>&1 | grep -v "already connected" || true
+    sleep 1
+fi
 
 # Check device is reachable
-if ! $ADB -s "$DEVICE" shell echo ok &>/dev/null; then
-    log "ERROR: Device $DEVICE not reachable. Aborting."
+if [ -z "$DEVICE" ] || ! $ADB -s "$DEVICE" shell echo ok &>/dev/null; then
+    log "ERROR: no reachable ADB device (last tried: ${DEVICE:-none}). Aborting."
     exit 1
 fi
 
