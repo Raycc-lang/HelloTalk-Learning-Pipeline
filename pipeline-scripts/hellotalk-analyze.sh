@@ -25,6 +25,8 @@ SEMANTIC_PROMPT="$PROMPT_DIR/analysis-semantic.md"
 export API_BASE API_KEY MODEL MAX_TOKENS PROVIDER
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [$LOG_TAG] $*"; }
+# shellcheck source=/dev/null
+. "$HOME/.local/bin/hellotalk-common.sh"
 
 mkdir -p "$ANALYSIS_DIR"
 
@@ -223,6 +225,11 @@ for day_dir in "$ANALYSIS_DIR"/????-??-??; do
     merged="$day_dir/merged.txt"
 
     [ -f "$merged" ] || continue
+    if ! source_has_text "$merged"; then
+        log "WARNING: $day has no assessable source text; keeping existing files and skipping analysis."
+        ((failed++)) || true
+        continue
+    fi
 
     for prompt_name in "${!PROMPTS[@]}"; do
         prompt_file="${PROMPTS[$prompt_name]}"
@@ -267,7 +274,8 @@ for day_dir in "$ANALYSIS_DIR"/????-??-??; do
                 ((analyzed++)) || true
             else
                 rm -f "$tmpout"
-                log "WARNING: $day/$prompt_name — empty response after retries."
+                log "WARNING: $day/$prompt_name — empty response; prior output preserved."
+                ((failed++)) || true
             fi
         else
             rm -f "$tmpout"

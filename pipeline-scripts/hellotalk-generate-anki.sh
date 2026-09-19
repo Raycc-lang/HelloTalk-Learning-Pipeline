@@ -110,6 +110,8 @@ for day_dir in "$ANALYSIS_DIR"/????-??-??; do
         output_file="$day_anki/$output_name"
 
         [ -s "$input_file" ] || continue
+        # source_has_text check removed: VERBATIM provenance check was
+        # guarding against ASR-error corrections, blocking legitimate edits.
 
         # New input always regenerates. A changed prompt only regenerates
         # recent days (or under FORCE_REGEN=1) so a single prompt edit does

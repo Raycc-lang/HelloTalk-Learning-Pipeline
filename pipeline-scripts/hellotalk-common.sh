@@ -2,6 +2,19 @@
 
 JUNK_MAX_BYTES=6
 
+# Check that a merged transcript has assessable text (not blank or only
+# pipeline markers). Replaces the old validate-analysis.py mechanism whose
+# VERBATIM provenance check was removed — it guarded against LLM "corrections"
+# of ASR errors, but that rejected legitimate edits and blocked generation.
+source_has_text() {
+    local merged="$1"
+    [ -s "$merged" ] || return 1
+    # Reject files that are only chunk markers / failure markers / whitespace.
+    local compact
+    compact=$(tr -d '[:space:]' < "$merged")
+    [ -n "$compact" ] && [[ "$compact" != *"[ANALYSISFAILED"* ]]
+}
+
 # Extract YYYY-MM-DD from filename like hellotalk_mic_20260323_...
 date_subdir() {
     local d="${1:14:8}"

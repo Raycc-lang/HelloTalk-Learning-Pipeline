@@ -282,6 +282,10 @@ for day in "${SELECTED_DAYS[@]}"; do
         fi
 
         [ -z "$src" ] && continue
+        # source_has_text check removed: VERBATIM provenance check was
+        # guarding against ASR-error corrections, blocking legitimate edits.
+        merged="${src%/*}/merged.txt"
+        [ -s "$merged" ] || continue
 
         day_anki="$ANKI_DIR/$day"
         mkdir -p "$day_anki"

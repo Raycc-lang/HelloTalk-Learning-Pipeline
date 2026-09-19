@@ -297,6 +297,8 @@ for day in "${SELECTED_DAYS[@]}"; do
         fi
 
         [ -z "$src" ] && continue
+        # source_has_text check removed: VERBATIM provenance check was
+        # guarding against ASR-error corrections, blocking legitimate edits.
 
         day_drill="$DRILL_DIR/$day"
         mkdir -p "$day_drill"

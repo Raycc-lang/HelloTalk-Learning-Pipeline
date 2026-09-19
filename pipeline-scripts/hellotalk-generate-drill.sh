@@ -128,6 +128,8 @@ for day_dir in "$ANALYSIS_DIR"/????-??-??; do
         output_file="$day_drill/$output_name"
 
         [ -s "$input_file" ] || continue
+        # source_has_text check removed: VERBATIM provenance check was
+        # guarding against ASR-error corrections, blocking legitimate edits.
 
         # Skip if output is up to date
         if [ -f "$output_file" ] && [ "$output_file" -nt "$input_file" ] && [ "$output_file" -nt "$prompt_file" ]; then
