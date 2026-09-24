@@ -45,8 +45,9 @@ _hv_log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [variants] $*" >&2; }
 
 # ── Slot configuration ────────────────────────────────────────────────
 # Each slot reads <SLOT>_PROVIDER / _MODEL / _API_BASE / _API_KEY /
-# _REASONING_EFFORT, falling back to the ambient PROVIDER / MODEL / ... so an
-# unconfigured PRIMARY slot behaves exactly like the current single-model setup.
+# _REASONING_EFFORT / _MAX_TOKENS, falling back to the ambient
+# PROVIDER / MODEL / ... so an unconfigured PRIMARY slot behaves exactly like
+# the current single-model setup.
 
 _hv_slot_value() {
     local slot="$1" field="$2" fallback="${3:-}"
@@ -57,8 +58,8 @@ _hv_slot_value() {
 }
 
 # Resolve a slot into API_BASE / API_KEY without touching the caller's env.
-# Prints "provider<TAB>model<TAB>base<TAB>key<TAB>effort", or nothing when the
-# slot cannot be used.
+# Prints "provider<TAB>model<TAB>base<TAB>key<TAB>effort<TAB>max_tokens", or
+# nothing when the slot cannot be used.
 #
 # Only the first slot inherits the ambient configuration, so leaving it
 # unconfigured reproduces today's single-model setup exactly — including an
@@ -71,7 +72,7 @@ _hv_slot_value() {
 # against its own habits.
 _hv_resolve_slot() {
     local slot="$1"
-    local provider model base key effort
+    local provider model base key effort mtok
     local first_slot="${VARIANT_SLOTS%% *}"
     local amb_provider="" amb_model="" amb_base="" amb_key=""
 
@@ -87,6 +88,13 @@ _hv_resolve_slot() {
     base="$(_hv_slot_value "$slot" API_BASE "$amb_base")"
     key="$(_hv_slot_value "$slot" API_KEY "$amb_key")"
     effort="$(_hv_slot_value "$slot" REASONING_EFFORT "${REASONING_EFFORT:-}")"
+    # The output budget, unlike BASE/KEY, is a property of the request rather
+    # than of the endpoint, so it falls back to the ambient MAX_TOKENS for
+    # every slot: a slot whose model has a lower output cap names its own
+    # budget here (SECONDARY_MAX_TOKENS=65536) instead of imposing a global cap
+    # on the other models — or relying on the endpoint to clamp, which is what
+    # turned one oversized ask into a 400 the caller cannot recover from.
+    mtok="$(_hv_slot_value "$slot" MAX_TOKENS "${MAX_TOKENS:-}")"
 
     [ -n "$provider" ] || return 1
 
@@ -111,7 +119,7 @@ _hv_resolve_slot() {
     esac
 
     [ -n "$model" ] && [ -n "$base" ] && [ -n "$key" ] || return 1
-    printf '%s\t%s\t%s\t%s\t%s' "$provider" "$model" "$base" "$key" "$effort"
+    printf '%s\t%s\t%s\t%s\t%s\t%s' "$provider" "$model" "$base" "$key" "$effort" "$mtok"
 }
 
 # List the slots that are fully configured, in VARIANT_SLOTS order, skipping any
@@ -150,10 +158,10 @@ hellotalk_variants_ready() {
 # Status is hellotalk-llm-call.py's, with 124 for timeout.
 _hv_call_slot() {
     local slot="$1" prompt_file="$2" input_file="$3" output_file="$4" label="$5"
-    local spec provider model base key effort rc=0
+    local spec provider model base key effort mtok rc=0
 
     spec="$(_hv_resolve_slot "$slot")" || return 3
-    IFS=$'\t' read -r provider model base key effort <<< "$spec"
+    IFS=$'\t' read -r provider model base key effort mtok <<< "$spec"
 
     _hv_log "$label: ${slot,,} model=$model provider=$provider"
 
@@ -161,6 +169,9 @@ _hv_call_slot() {
         export PROVIDER="$provider" MODEL="$model" API_BASE="$base" API_KEY="$key"
         if [ -n "$effort" ]; then
             export REASONING_EFFORT="$effort"
+        fi
+        if [ -n "$mtok" ]; then
+            export MAX_TOKENS="$mtok"
         fi
         timeout "$HARD_TIMEOUT" python3 "$LLM_CALL" \
             "$prompt_file" "$input_file" "$output_file"

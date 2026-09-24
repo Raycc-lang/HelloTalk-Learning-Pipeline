@@ -227,11 +227,12 @@ All sensitive configuration lives in `~/.config/hellotalk/env`. The pipeline sup
 | `<SLOT>_MODEL` | first slot inherits `MODEL` | Model ID for one slot. Required on every slot after the first |
 | `<SLOT>_API_BASE` / `<SLOT>_API_KEY` | provider's own vars | Per-slot credential override, for pointing a slot at a different endpoint |
 | `<SLOT>_REASONING_EFFORT` | `REASONING_EFFORT` | Per-slot thinking effort |
+| `<SLOT>_MAX_TOKENS` | `MAX_TOKENS` | Per-slot output budget. Use it when one slot's model has a lower output cap (e.g. `65536` behind a gateway) instead of capping every model globally |
 | `JUDGE_PROVIDER` / `JUDGE_MODEL` | first usable slot | Which model reconciles the candidates |
 | `VARIANT_KEEP` | `1` | Keep the raw candidates under `variants/` beside the finished file |
 | `VARIANT_MIN_UNIT_PCT` | `50` | Minimum percent of the richest candidate's entry/card/topic count a reconciled file must retain to be accepted |
 
-> **Note on `MAX_TOKENS`:** it is no longer set globally. Thinking models spend the same token budget on internal reasoning, so a small cap can yield zero visible output. Each script supplies its own default instead (`131072` for analyze/drill, with a `32768` fallback inside `hellotalk-llm-call.py`).
+> **Note on `MAX_TOKENS`:** it is no longer set globally. Thinking models spend the same token budget on internal reasoning, so a small cap can yield zero visible output. Each script supplies its own default instead (`131072` for analyze/drill, with a `32768` fallback inside `hellotalk-llm-call.py`). When one slot's model has a lower output cap, lower just that slot with `<SLOT>_MAX_TOKENS` — e.g. `SECONDARY_MAX_TOKENS=65536`.
 
 ### Script-Specific Notes
 

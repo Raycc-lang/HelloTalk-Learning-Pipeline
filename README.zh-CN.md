@@ -225,11 +225,12 @@ HelloTalk 上的语言学习者每天都会产出大量自发、真实的口语�
 | `<SLOT>_MODEL` | 第一个槽位继承 `MODEL` | 某个槽位的模型 ID。第一个之后的每个槽位都必须指定 |
 | `<SLOT>_API_BASE` / `<SLOT>_API_KEY` | 各 provider 自身变量 | 每个槽位的凭据覆盖，用于指向不同的端点 |
 | `<SLOT>_REASONING_EFFORT` | `REASONING_EFFORT` | 每个槽位的思考力度 |
+| `<SLOT>_MAX_TOKENS` | `MAX_TOKENS` | 每个槽位的输出上限。当某个槽位的模型输出上限更低时用它（例如网关后面的 `65536`），不必给所有模型设全局上限 |
 | `JUDGE_PROVIDER` / `JUDGE_MODEL` | 第一个可用槽位 | 用于合并候选结果的模型 |
 | `VARIANT_KEEP` | `1` | 在 finished 文件旁保留 `variants/` 目录下的原始候选 |
 | `VARIANT_MIN_UNIT_PCT` | `50` | 合并后的文件必须保留最丰富候选的条目/卡片/主题数至少此百分比，否则被拒绝 |
 
-> **关于 `MAX_TOKENS`：** 不再全局设置。思考模型会将同样的 token 预算花在内部推理上，设得过小可能导致零可见输出。各脚本各自提供默认值（analyze/drill 为 `131072`，`hellotalk-llm-call.py` 内有 `32768` 兜底）。
+> **关于 `MAX_TOKENS`：** 不再全局设置。思考模型会将同样的 token 预算花在内部推理上，设得过小可能导致零可见输出。各脚本各自提供默认值（analyze/drill 为 `131072`，`hellotalk-llm-call.py` 内有 `32768` 兜底）。若某个槽位指向输出上限更低的模型，用 `<SLOT>_MAX_TOKENS` 单独降低该槽位的预算即可，例如 `SECONDARY_MAX_TOKENS=65536`。
 
 ### 各脚本备注
 
