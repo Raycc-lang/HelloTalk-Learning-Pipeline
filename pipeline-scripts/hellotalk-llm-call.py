@@ -31,10 +31,11 @@ Inputs >120,000 chars are auto-chunked at blank-line / line boundaries
 and joined with chunk headers (or plain when LLM_CHUNK_HEADERS=0, used
 for TSV anki output).
 """
-import sys, os, time, re, datetime, threading
+import sys, os, time, re, datetime, threading, tempfile, hashlib
+from email.utils import parsedate_to_datetime
 
-MAX_RETRIES = 3
-RETRY_DELAYS = [30, 60, 120]
+MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "5"))
+RETRY_DELAYS = [int(x) for x in os.environ.get("LLM_RETRY_DELAYS", "5,8,12,15").split(",")] or [5]
 STREAM_IDLE_TIMEOUT = float(os.environ.get("STREAM_IDLE_TIMEOUT", "240"))
 CHUNK_THRESHOLD = 120000
 
@@ -68,7 +69,8 @@ def write_quota_sentinel(reason, message):
             expires_at = _next_daily_reset_epoch()
         else:
             expires_at = int(time.time()) + 600  # 10 minutes
-        path = os.path.join(QUOTA_DIR, f"quota-block-{provider}")
+        account = hashlib.sha256((os.environ.get("API_BASE", "") + chr(0) + os.environ.get("API_KEY", "")).encode()).hexdigest()[:16]
+        path = os.path.join(QUOTA_DIR, f"quota-block-{provider}-{account}")
         msg_clean = re.sub(r"\s+", " ", str(message))[:500]
         with open(path, "w") as f:
             f.write(f"provider={provider}\n")
@@ -159,7 +161,13 @@ def classify_error(exc):
         # Extract Retry-After from response headers if available
         retry_after = ""
         if resp is not None:
-            ra = getattr(resp, "headers", {}).get("retry-after", "")
+            headers = getattr(resp, "headers", {})
+            ra = headers.get("retry-after", "")
+            if not ra and headers.get("retry-after-ms"):
+                try:
+                    ra = str(float(headers["retry-after-ms"]) / 1000)
+                except ValueError:
+                    pass
             if ra:
                 retry_after = f" [retry-after={ra}s]"
         return "rate_limit", body.strip()[:300] + retry_after
@@ -201,6 +209,13 @@ def split_text(text, threshold):
         current = []
         current_len = 0
         for line in lines:
+            if len(line) > limit:
+                if current:
+                    pieces.append("\n".join(current))
+                    current, current_len = [], 0
+                while len(line) > limit:
+                    pieces.append(line[:limit])
+                    line = line[limit:]
             line_len = len(line) + 1
             if current and current_len + line_len > limit:
                 pieces.append("\n".join(current))
@@ -362,10 +377,9 @@ def call_api(system_prompt, input_chunk, return_usage=False):
     elapsed = int(time.time() - start)
     result = "".join(output_parts).lstrip()
 
-    # A normal completion reports finish_reason "stop" (or None on some
-    # providers). "length" / "content_filter" mean the output was cut off —
-    # never persist a truncated analysis as if it succeeded.
-    if finish_reason in ("length", "content_filter"):
+    # Require a confirmed normal completion. A disconnected stream with no
+    # terminal reason must not publish its partial text.
+    if finish_reason not in ("stop",):
         log(f"[WARNING: output truncated, finish_reason={finish_reason}, {len(result)} chars received]")
         raise OutputTruncated(finish_reason)
 
@@ -388,13 +402,21 @@ def call_api(system_prompt, input_chunk, return_usage=False):
 
 def _parse_retry_after(detail):
     """Extract retry-after seconds from error detail string."""
-    m = re.search(r"\[retry-after=(\d+)s\]", detail)
-    return int(m.group(1)) if m else 0
+    m = re.search(r"\[retry-after=(.*?)s\]", detail)
+    if not m:
+        return 0
+    try:
+        return max(0, float(m.group(1)))
+    except ValueError:
+        try:
+            return max(0, parsedate_to_datetime(m.group(1)).timestamp() - time.time())
+        except (ValueError, TypeError, OverflowError):
+            return 0
 
 
-# Rate-limit retries use longer, separate backoff schedule
-RATE_LIMIT_MAX_RETRIES = 8
-RATE_LIMIT_BASE_DELAY = 60  # seconds; overridden by Retry-After if present
+# Rate-limit retries use a separate backoff schedule (also env-tunable).
+RATE_LIMIT_MAX_RETRIES = int(os.environ.get("LLM_RATE_LIMIT_MAX_RETRIES", "8"))
+RATE_LIMIT_BASE_DELAY = int(os.environ.get("LLM_RATE_LIMIT_DELAY", "60"))
 
 
 def call_with_retry(system_prompt, input_chunk, chunk_label=""):
@@ -414,7 +436,7 @@ def call_with_retry(system_prompt, input_chunk, chunk_label=""):
             log(f"[attempt {transient_attempts}/{MAX_RETRIES}{label}: empty response]")
             if transient_attempts >= MAX_RETRIES:
                 break
-            delay = RETRY_DELAYS[transient_attempts - 1]
+            delay = RETRY_DELAYS[min(transient_attempts - 1, len(RETRY_DELAYS) - 1)]
             log(f"[retrying in {delay}s...]")
             time.sleep(delay)
         except OutputTruncated as t:
@@ -446,7 +468,7 @@ def call_with_retry(system_prompt, input_chunk, chunk_label=""):
             log(f"[attempt {transient_attempts}/{MAX_RETRIES}{label} transient: {detail}]")
             if transient_attempts >= MAX_RETRIES:
                 break
-            delay = RETRY_DELAYS[transient_attempts - 1]
+            delay = RETRY_DELAYS[min(transient_attempts - 1, len(RETRY_DELAYS) - 1)]
             log(f"[retrying in {delay}s...]")
             time.sleep(delay)
 
@@ -529,6 +551,17 @@ def cache_probe(prompt_file, input_file):
 # Main
 # ──────────────────────────────────────────────────────────────────────
 
+def atomic_output(path, text):
+    fd, tmp = tempfile.mkstemp(prefix=".llm-", dir=os.path.dirname(os.path.abspath(path)))
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
 def main():
     args = sys.argv[1:]
     if args and args[0] == "--cache-probe":
@@ -567,8 +600,7 @@ def main():
             sys.exit(3)
         if not result:
             sys.exit(1)
-        with open(output_path, "w") as f:
-            f.write(result)
+        atomic_output(output_path, result)
         sys.exit(0)
 
     log(f"[splitting into {total} chunks]")
@@ -600,13 +632,12 @@ def main():
                 results.append("[ANALYSIS FAILED — will retry on next run]")
 
     combined = "\n\n".join(results) if use_chunk_headers else "\n".join(results)
-    with open(output_path, "w") as f:
-        f.write(combined)
 
     if chunk_failed > 0:
         log(f"[WARNING: {chunk_failed}/{total} chunks failed]")
         sys.exit(1)
 
+    atomic_output(output_path, combined)
     sys.exit(0)
 
 
