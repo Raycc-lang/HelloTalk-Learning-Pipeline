@@ -19,9 +19,8 @@
 # blocks keep working unchanged:
 #   0 success   1 ordinary failure   2 quota (abort batch)   3 fatal API error
 #
-# When VARIANTS is not 1, or fewer than two slots are usable, this makes exactly
-# one call with the caller's existing environment — identical to the old
-# behavior, same cost.
+# Candidate slots exclude JUDGE. Validated requests are cached, and failures
+# leave the artifact pending for a later retry. VARIANTS=0 uses the ambient model.
 #
 # Cost warning: with VARIANTS=1 a single artifact costs three API calls
 # (two generations + one reconciliation) instead of one.
@@ -132,6 +131,7 @@ _hv_usable_slots() {
     local -A seen=()
 
     for slot in $VARIANT_SLOTS; do
+        [ "$slot" = JUDGE ] && continue
         spec="$(_hv_resolve_slot "$slot" 2>/dev/null)" || continue
         [ -n "$spec" ] || continue
         IFS=$'\t' read -r provider model rest <<< "$spec"
@@ -161,7 +161,7 @@ _hv_call_slot() {
     local spec provider model base key effort mtok rc=0
 
     spec="$(_hv_resolve_slot "$slot")" || return 3
-    IFS=$'\t' read -r provider model base key effort mtok <<< "$spec"
+    IFS='|' read -r provider model base key effort mtok <<< "${spec//$'\t'/|}"
 
     _hv_log "$label: ${slot,,} model=$model provider=$provider"
 
@@ -173,7 +173,12 @@ _hv_call_slot() {
         if [ -n "$mtok" ]; then
             export MAX_TOKENS="$mtok"
         fi
-        timeout "$HARD_TIMEOUT" python3 "$LLM_CALL" \
+        . "$HOME/.local/bin/hellotalk-quota-check.sh" || exit 1
+        hellotalk_quota_check || exit 2
+        local remaining=$(( ${HV_ARTIFACT_DEADLINE:-$(($(date +%s) + HARD_TIMEOUT))} - $(date +%s) ))
+        [ "$remaining" -gt 0 ] || exit 124
+        [ "$remaining" -le "$HARD_TIMEOUT" ] || remaining="$HARD_TIMEOUT"
+        timeout "$remaining" python3 "$LLM_CALL" \
             "$prompt_file" "$input_file" "$output_file"
     ) || rc=$?
 
@@ -196,7 +201,7 @@ _hv_count_units() {
 
     case "$kind" in
         tsv)
-            awk -F'\t' 'NF==6 { n++ } END { print n+0 }' "$file"
+            _hv_tsv_filter "$file" count
             ;;
         analysis)
             # Count entries by whichever per-entry label the model actually used.
@@ -220,12 +225,26 @@ _hv_count_units() {
             ' "$file"
             ;;
         drill)
-            grep -cE '^#{1,4}[ \t]+Topic' "$file" || true
+            awk '/^#{1,4}[ \t]+Topic/ {n++} END {print n+0}' "$file"
             ;;
         *)
             wc -l < "$file"
             ;;
     esac
+}
+
+# Required fields follow the two installed card schemas. Pattern/Contrast and
+# WatchOut/OriginalPhrase may be empty, as the prompts explicitly allow.
+_hv_tsv_filter() {
+    awk -F'\t' -v mode="${2:-filter}" '
+    NF==6 {
+        ok=($1 ~ /[^[:space:]]/ && $2 ~ /[^[:space:]]/ && $3 ~ /[^[:space:]]/)
+        if ($1 == "FILL IN THE BLANK" || $1 == "CORRECT THE ERROR") ok=ok && ($6 ~ /[^[:space:]]/)
+        else if ($1 == "ERROR CORRECTION" || $1 == "COLLOCATION COMPLETION" || $1 == "IDIOM UPGRADE" || $1 == "PATTERN COMPLETION") ok=ok && ($4 ~ /[^[:space:]]/)
+        else ok=0
+        if(ok) {n++; if(mode != "count") print}
+    }
+    END {if(mode == "count") print n+0}' "$1"
 }
 
 # Returns 0 when the file is usable as the final artifact.
@@ -244,6 +263,13 @@ _hv_output_sane() {
     units=$(_hv_count_units "$file" "$kind")
     [ "$units" -gt 0 ] || return 1
 
+    if [ "$kind" = tsv ]; then
+        local total
+        total=$(awk 'NF {n++} END {print n+0}' "$file") || return 1
+        [ $((units * 100 / total)) -ge "${TSV_MIN_VALID_PCT:-90}" ] || return 1
+    fi
+    ! grep -q '\[ANALYSIS FAILED' "$file" || return 1
+
     # A drill session needs its body, not just a topic heading.
     if [ "$kind" = "drill" ]; then
         grep -qE '^\*{0,2}(Source context|Target (structures|chunks)|Content skeleton|Drill instructions)' "$file" || return 1
@@ -255,212 +281,112 @@ _hv_output_sane() {
     return 0
 }
 
-# Echo the best candidate to fall back on: the first that passes its structural
-# check, or failing that the one with the most units. Always taking candidate 1
-# would hand back a malformed file while a good one sat next to it.
-_hv_pick_fallback() {
-    local kind="$1"; shift
-    local f best="" best_units=-1 units
-
-    for f in "$@"; do
-        if _hv_output_sane "$f" "$kind"; then
-            printf '%s' "$f"
-            return 0
-        fi
-        units=$(_hv_count_units "$f" "$kind")
-        if [ "$units" -gt "$best_units" ]; then
-            best_units=$units
-            best="$f"
-        fi
-    done
-    printf '%s' "$best"
-}
-
-# ── Build the judge's user message ────────────────────────────────────
-# Source material first, then each candidate inside a named delimiter. The
-# judge prompt tells the model to treat everything inside the delimiters as
-# data. with_source=0 drops the source material to fit the size budget.
-_hv_build_judge_input() {
-    local dest="$1" source_file="$2" with_source="$3"; shift 3
-    local n=0 variant
-
-    : > "$dest"
-    if [ "$with_source" = "1" ]; then
-        {
-            printf '===== BEGIN SOURCE MATERIAL =====\n'
-            cat "$source_file"
-            printf '\n===== END SOURCE MATERIAL =====\n\n'
-        } >> "$dest"
-    fi
-
-    for variant in "$@"; do
-        n=$((n + 1))
-        {
-            printf '===== BEGIN CANDIDATE %d =====\n' "$n"
-            cat "$variant"
-            printf '\n===== END CANDIDATE %d =====\n\n' "$n"
-        } >> "$dest"
-    done
-}
-
 # ── Public entry point ────────────────────────────────────────────────
+# Cache only validated immutable candidates. Fingerprint covers request settings;
+# callers retain their existing freshness policy (model changes require force).
+_hv_cache_key() {
+    local spec
+    spec=$(_hv_resolve_slot "$1") || return 3
+    ( set -o pipefail; { printf '%s\n' "$spec" || exit 1; cat "$2" "$3" || exit 1; } | sha256sum | cut -d' ' -f1 )
+}
+_hv_build_judge_input_checked() {
+    local dest="$1" source_file="$2" with_source="$3"; shift 3
+    : > "$dest" || return 1
+    if [ "$with_source" = 1 ]; then
+        printf '===== BEGIN SOURCE MATERIAL =====\n' >> "$dest" || return 1
+        cat "$source_file" >> "$dest" || return 1
+        printf '\n===== END SOURCE MATERIAL =====\n' >> "$dest" || return 1
+    fi
+    local n=0 f
+    for f in "$@"; do
+        n=$((n+1))
+        printf '\n===== BEGIN CANDIDATE %d =====\n' "$n" >> "$dest" || return 1
+        cat "$f" >> "$dest" || return 1
+        printf '\n===== END CANDIDATE %d =====\n' "$n" >> "$dest" || return 1
+    done
+}
 hellotalk_generate() {
     local prompt_file="$1" input_file="$2" output_file="$3" kind="$4"
     local label="${5:-$(basename "${output_file%.*}")}"
-    local rc=0
-
-    # Single-model path: exactly the old behavior, one call, caller's env.
-    if [ "$VARIANTS" != "1" ]; then
-        timeout "$HARD_TIMEOUT" python3 "$LLM_CALL" \
-            "$prompt_file" "$input_file" "$output_file" || rc=$?
-        return $rc
+    local HV_ARTIFACT_DEADLINE=$(( $(date +%s) + ${ARTIFACT_TIMEOUT:-$HARD_TIMEOUT} ))
+    if [ -n "${BATCH_DEADLINE:-}" ] && [ "$BATCH_DEADLINE" -lt "$HV_ARTIFACT_DEADLINE" ]; then
+        HV_ARTIFACT_DEADLINE="$BATCH_DEADLINE"
     fi
-
-    local -a slots=()
-    mapfile -t slots < <(_hv_usable_slots)
-
-    if [ "${#slots[@]}" -lt 2 ]; then
-        _hv_log "$label: only ${#slots[@]} slot(s) configured — single-model call."
-        timeout "$HARD_TIMEOUT" python3 "$LLM_CALL" \
-            "$prompt_file" "$input_file" "$output_file" || rc=$?
-        return $rc
+    local -a slots=() produced=()
+    if [ "$VARIANTS" = 1 ]; then
+        mapfile -t slots < <(_hv_usable_slots)
     fi
-
-    # Callers that generate into a mktemp file set VARIANT_OUT_DIR to the real
-    # destination directory, so kept variants land beside the finished artifact
-    # instead of in /tmp.
+    if [ "${#slots[@]}" -eq 0 ]; then
+        local AMBIENT_PROVIDER="${PROVIDER:-}" AMBIENT_MODEL="${MODEL:-}" AMBIENT_API_BASE="${API_BASE:-}" AMBIENT_API_KEY="${API_KEY:-}"
+        local AMBIENT_REASONING_EFFORT="${REASONING_EFFORT:-}" AMBIENT_MAX_TOKENS="${MAX_TOKENS:-}"
+        slots=(AMBIENT)
+    fi
     local variant_dir="${VARIANT_OUT_DIR:-$(dirname "$output_file")}/$VARIANT_DIR_NAME"
-    mkdir -p "$variant_dir"
-
-    # ── Generate one candidate per slot ───────────────────────────────
-    local -a produced=()
-    local slot slot_rc vfile ok=0
-    local attempted=0 fatal=0 timedout=0
+    mkdir -p "$variant_dir" || return 1
+    local slot key vfile tmp rc units ref_units=0 force_key=""
+    if [ "${FORCE_REGEN:-0}" = 1 ]; then force_key=".force-$(date +%s%N)"; fi
     for slot in "${slots[@]}"; do
-        vfile="$variant_dir/${label}.${slot,,}"
-        slot_rc=0
-        attempted=$((attempted + 1))
-        _hv_call_slot "$slot" "$prompt_file" "$input_file" "$vfile" "$label" || slot_rc=$?
-
-        case $slot_rc in
-            0)
-                if [ -s "$vfile" ]; then
-                    produced+=("$vfile")
-                    ok=$((ok + 1))
-                else
-                    _hv_log "$label: ${slot,,} returned an empty file — dropping this candidate."
-                fi
-                ;;
-            2)
-                # Quota is a batch-level condition; propagate immediately so the
-                # caller writes its sentinel and stops, same as before.
-                _hv_log "$label: ${slot,,} hit quota."
-                return 2
-                ;;
-            3)
-                fatal=$((fatal + 1))
-                _hv_log "$label: ${slot,,} hit a fatal API error — dropping this candidate."
-                ;;
-            124)
-                timedout=$((timedout + 1))
-                _hv_log "$label: ${slot,,} timed out after ${HARD_TIMEOUT}s — dropping this candidate."
-                ;;
-            *)
-                _hv_log "$label: ${slot,,} failed (rc=$slot_rc) — dropping this candidate."
-                ;;
-        esac
-    done
-
-    if [ "$ok" -eq 0 ]; then
-        # Preserve the failure class. A bad key or model ID is fatal for every
-        # remaining artifact too, so it has to reach the caller's abort branch
-        # rather than being retried once per day for the rest of the batch.
-        if [ "$fatal" -eq "$attempted" ]; then
-            _hv_log "$label: every slot failed fatally — aborting."
-            return 3
+        key=$(_hv_cache_key "$slot" "$prompt_file" "$input_file") || return $?
+        vfile="$variant_dir/${label}.${slot,,}.$key$force_key"
+        if ! _hv_output_sane "$vfile" "$kind"; then
+            tmp=$(mktemp "$variant_dir/.candidate.XXXXXX") || return 1
+            rc=0
+            _hv_call_slot "$slot" "$prompt_file" "$input_file" "$tmp" "$label" || rc=$?
+            if [ "$rc" -ne 0 ]; then
+                rm -f "$tmp" || return 1
+                return "$rc"
+            fi
+            if ! _hv_output_sane "$tmp" "$kind"; then
+                rm -f "$tmp" || return 1
+                return 1
+            fi
+            mv "$tmp" "$vfile" || return 1
+        else
+            _hv_log "$label: cached ${slot,,} candidate"
         fi
-        if [ "$timedout" -eq "$attempted" ]; then
-            _hv_log "$label: every slot timed out."
-            return 124
-        fi
-        _hv_log "$label: every candidate failed."
-        return 1
-    fi
-
-    if [ "$ok" -eq 1 ]; then
-        _hv_log "$label: only one candidate survived — using it without reconciliation."
-        cp "${produced[0]}" "$output_file"
-        [ "$VARIANT_KEEP" = "1" ] || rm -f "${produced[@]}"
-        return 0
-    fi
-
-    # Best candidate to fall back on, and the unit count the reconciled file is
-    # measured against.
-    local fallback ref_units
-    fallback="$(_hv_pick_fallback "$kind" "${produced[@]}")"
-    ref_units=0
-    local c u
-    for c in "${produced[@]}"; do
-        u=$(_hv_count_units "$c" "$kind")
-        [ "$u" -gt "$ref_units" ] && ref_units=$u
+        produced+=("$vfile")
+        units=$(_hv_count_units "$vfile" "$kind") || return 1
+        [ "$units" -le "$ref_units" ] || ref_units="$units"
     done
-
-    # ── Reconcile ─────────────────────────────────────────────────────
-    local judge_prompt="$JUDGE_PROMPT_DIR/judge-${kind}.md"
-    if [ ! -s "$judge_prompt" ]; then
-        _hv_log "$label: no judge prompt at $judge_prompt — using $(basename "$fallback")."
-        cp "$fallback" "$output_file"
-        return 0
+    local chosen="${produced[0]}"
+    if [ "${#produced[@]}" -ge 2 ]; then
+        local judge_prompt="$JUDGE_PROMPT_DIR/judge-${kind}.md" judge_slot=JUDGE judge_input size
+        [ -s "$judge_prompt" ] || { _hv_log "Missing judge prompt: $judge_prompt"; return 1; }
+        _hv_resolve_slot JUDGE >/dev/null || judge_slot="${slots[0]}"
+        judge_input=$(mktemp "$variant_dir/.judge-input.XXXXXX") || return 1
+        _hv_build_judge_input_checked "$judge_input" "$input_file" 1 "${produced[@]}" || return 1
+        size=$(wc -c < "$judge_input") || return 1
+        if [ "$size" -gt "$VARIANT_JUDGE_MAX_CHARS" ]; then
+            _hv_build_judge_input_checked "$judge_input" "$input_file" 0 "${produced[@]}" || return 1
+            size=$(wc -c < "$judge_input") || return 1
+        fi
+        if [ "$size" -gt "$VARIANT_JUDGE_MAX_CHARS" ]; then
+            rm -f "$judge_input" || return 1
+            return 1
+        fi
+        key=$(_hv_cache_key "$judge_slot" "$judge_prompt" "$judge_input") || return $?
+        chosen="$variant_dir/${label}.judge.$key$force_key"
+        if ! _hv_output_sane "$chosen" "$kind" "$ref_units"; then
+            tmp=$(mktemp "$variant_dir/.judge.XXXXXX") || return 1
+            rc=0
+            _hv_call_slot "$judge_slot" "$judge_prompt" "$judge_input" "$tmp" "$label-judge" || rc=$?
+            if [ "$rc" -ne 0 ]; then
+                rm -f "$tmp" "$judge_input" || return 1
+                return "$rc"
+            fi
+            if ! _hv_output_sane "$tmp" "$kind" "$ref_units"; then
+                rm -f "$tmp" "$judge_input" || return 1
+                return 1
+            fi
+            mv "$tmp" "$chosen" || return 1
+        fi
+        rm -f "$judge_input" || return 1
     fi
-
-    local judge_input judge_out judge_rc=0 size
-    judge_input=$(mktemp)
-    judge_out=$(mktemp)
-
-    _hv_build_judge_input "$judge_input" "$input_file" 1 "${produced[@]}"
-    size=$(wc -c < "$judge_input")
-    if [ "$size" -gt "$VARIANT_JUDGE_MAX_CHARS" ]; then
-        _hv_log "$label: judge input ${size} chars — retrying without the source material."
-        _hv_build_judge_input "$judge_input" "$input_file" 0 "${produced[@]}"
-        size=$(wc -c < "$judge_input")
+    tmp=$(mktemp "$(dirname "$output_file")/.publish.XXXXXX") || return 1
+    cp "$chosen" "$tmp" || return 1
+    mv "$tmp" "$output_file" || return 1
+    if [ "$VARIANT_KEEP" != 1 ]; then
+        rm -f "${produced[@]}" "$chosen" || return 1
     fi
-
-    if [ "$size" -gt "$VARIANT_JUDGE_MAX_CHARS" ]; then
-        _hv_log "$label: candidates alone are ${size} chars, over the judge budget — using $(basename "$fallback") unreconciled."
-        cp "$fallback" "$output_file"
-        rm -f "$judge_input" "$judge_out"
-        return 0
-    fi
-
-    local judge_slot="JUDGE"
-    _hv_resolve_slot JUDGE >/dev/null 2>&1 || judge_slot="${slots[0]}"
-
-    _hv_log "$label: reconciling ${ok} candidates (${size} chars)."
-    _hv_call_slot "$judge_slot" "$judge_prompt" "$judge_input" "$judge_out" "$label-judge" || judge_rc=$?
-
-    if [ $judge_rc -eq 2 ]; then
-        # Do not promote a candidate here. The caller is about to abort the
-        # batch and deletes its temporary output first, so a copy would be
-        # discarded anyway — but even if it survived, an unreconciled file
-        # written to the final path would then be newer than its input, and the
-        # freshness check would skip this day on every later run. That would
-        # lock in the unreconciled version permanently. Leaving the artifact
-        # absent means the next run regenerates and reconciles it properly.
-        rm -f "$judge_input" "$judge_out"
-        _hv_log "$label: quota hit during reconciliation. Both candidates are kept in $variant_dir; the next run after quota resets will regenerate and reconcile."
-        return 2
-    fi
-
-    if [ $judge_rc -ne 0 ] || ! _hv_output_sane "$judge_out" "$kind" "$ref_units"; then
-        _hv_log "$label: reconciliation failed or returned an incomplete file — using $(basename "$fallback") instead."
-        cp "$fallback" "$output_file"
-        rm -f "$judge_input" "$judge_out"
-        return 0
-    fi
-
-    mv "$judge_out" "$output_file"
-    rm -f "$judge_input"
-    [ "$VARIANT_KEEP" = "1" ] || rm -f "${produced[@]}"
-    _hv_log "$label: reconciled -> $(wc -c < "$output_file") bytes"
     return 0
 }

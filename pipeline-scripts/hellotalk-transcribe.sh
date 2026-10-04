@@ -21,7 +21,7 @@ fi
 # shellcheck source=/dev/null
 . "$HOME/.local/bin/hellotalk-common.sh"
 
-mkdir -p "$TRANSCRIBED_DIR" "$TRANSCRIPT_DIR"
+mkdir -p "$TRANSCRIBED_DIR" "$TRANSCRIPT_DIR" "$TRANSCRIPT_DIR/.rejected"
 if ! mkdir -p "$FAILED_DIR_PRIMARY" 2>/dev/null; then
     FAILED_DIR="$FAILED_DIR_FALLBACK"
 fi
@@ -46,13 +46,21 @@ PYTHON_CLIENT="${PYTHON_CLIENT:-$PYTHON_CLIENT_CACHE}"
 NVIDIA_SERVER="grpc.nvcf.nvidia.com:443"
 NVIDIA_FUNCTION_ID="b702f636-f60c-4a3d-a6f4-f3568c13bd7d"
 
-if [ ! -f "$PYTHON_CLIENT" ]; then
+if [ ! -s "$PYTHON_CLIENT" ]; then
     log "NVIDIA client not found at $PYTHON_CLIENT; downloading from upstream..."
     mkdir -p "$(dirname "$PYTHON_CLIENT")"
-    if curl -fsSL --connect-timeout 15 "$PYTHON_CLIENT_URL" -o "$PYTHON_CLIENT"; then
-        chmod +x "$PYTHON_CLIENT"
+    client_tmp=$(mktemp "$(dirname "$PYTHON_CLIENT")/.client.XXXXXX")
+    if curl -fsSL --connect-timeout 15 "$PYTHON_CLIENT_URL" -o "$client_tmp" && [ -s "$client_tmp" ] && python3 - "$client_tmp" <<'VALIDATE_CLIENT'
+import ast, sys
+from pathlib import Path
+ast.parse(Path(sys.argv[1]).read_text())
+VALIDATE_CLIENT
+    then
+        chmod +x "$client_tmp"
+        mv "$client_tmp" "$PYTHON_CLIENT"
         log "Downloaded Riva client to $PYTHON_CLIENT"
     else
+        rm -f "$client_tmp"
         log "ERROR: failed to download Riva client from $PYTHON_CLIENT_URL"
         exit 1
     fi
@@ -161,26 +169,47 @@ move_to_failed() {
     log "  Moved to $dest_dir/$base"
 }
 
+# Recover legacy service failures automatically; permanent audio rejection stays separate.
+for failed_root in "${FAILED_DIR_ROOTS[@]}"; do
+    for reason in auth_error network_error rate_limit grpc_error; do
+        shopt -s nullglob
+        for old in "$failed_root/$reason"/*.wav; do
+            [ ! -e "$PROCESSED_DIR/$(basename "$old")" ] || continue
+            mkdir -p "$PROCESSED_DIR"
+            mv "$old" "$PROCESSED_DIR/"
+        done
+        shopt -u nullglob
+    done
+done
 shopt -s nullglob
 wav_files=("$PROCESSED_DIR"/*.wav)
 shopt -u nullglob
-
-if [ ${#wav_files[@]} -eq 0 ]; then
-    log "No files to transcribe."
-    exit 0
-fi
-
-log "Found ${#wav_files[@]} segment(s) to transcribe."
 
 success=0
 fail=0
 prefiltered=0
 
+if [ ${#wav_files[@]} -gt 0 ]; then
+log "Found ${#wav_files[@]} segment(s) to transcribe."
+
 for wav in "${wav_files[@]}"; do
     base="$(basename "$wav" .wav)"
     txt_file="$TRANSCRIPT_DIR/${base}.txt"
 
-    if [ -f "$txt_file" ]; then
+    # New recordings are visible only after process-audio publishes its manifest.
+    recording="${base%_[0-9][0-9][0-9]}"
+    if [ -f "$PROCESSED_DIR/$recording.building" ]; then
+        fail=$((fail + 1))
+        continue
+    fi
+    if [ -f "$wav.retry" ]; then
+        read -r retry_at < "$wav.retry"
+        if [[ "$retry_at" =~ ^[0-9]+$ ]] && [ "$retry_at" -gt "$(date +%s)" ]; then
+            fail=$((fail + 1))
+            continue
+        fi
+    fi
+    if [ -s "$txt_file" ] && ! is_junk_file "$txt_file"; then
         log "Skipping $base (already transcribed), moving audio."
         date_dir="$(date_subdir "$base")"
         mkdir -p "$TRANSCRIBED_DIR/$date_dir"
@@ -191,7 +220,8 @@ for wav in "${wav_files[@]}"; do
     pre_reason=""
     if pre_reason="$(prefilter_reason "$wav")"; then
         log "Pre-filter rejected $base ($pre_reason); deleting segment before API call."
-        rm -f "$wav"
+        printf '%s\n' "$pre_reason" > "$TRANSCRIPT_DIR/.rejected/$base"
+        rm -f "$wav" "$wav.retry"
         prefiltered=$((prefiltered + 1))
         continue
     fi
@@ -219,13 +249,14 @@ for wav in "${wav_files[@]}"; do
         last_output="$transcribe_output"
         transcript=$(printf '%s\n' "$transcribe_output" | sed -n 's/^Final transcript:[[:space:]]*//p' | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')
 
-        if [ -n "$transcript" ]; then
+        if [ "$last_exit_code" -eq 0 ] && [ -n "$transcript" ]; then
             if [ "$attempt" -gt 1 ]; then
                 log "  Succeeded on attempt $attempt/$MAX_NETWORK_RETRIES."
             fi
             break
         fi
 
+        transcript=""
         failure_type=$(classify_failure "$transcribe_output" "$last_exit_code")
 
         if [[ "$failure_type" == "no_speech" || "$failure_type" == "invalid_audio" || "$failure_type" == "auth_error" ]]; then
@@ -250,19 +281,32 @@ for wav in "${wav_files[@]}"; do
         if [ -n "$last_output" ]; then
             log "  Last error: $(printf '%s\n' "$last_output" | tail -n 1)"
         fi
-        move_to_failed "$wav" "$failure_type"
-        fail=$((fail + 1))
+        if [[ "$failure_type" = invalid_audio || "$failure_type" = no_speech ]]; then
+            move_to_failed "$wav" "$failure_type"
+            printf '%s\n' "$failure_type" > "$TRANSCRIPT_DIR/.rejected/$base"
+        else
+            printf '%s\n' "$(( $(date +%s) + ${TRANSCRIBE_RETRY_SECONDS:-600} ))" > "$wav.retry.tmp"
+            mv "$wav.retry.tmp" "$wav.retry"
+            fail=$((fail + 1))
+            # An exhausted shared service failure applies to the whole batch.
+            log "Provider failure; input remains pending. Stopping batch."
+            break
+        fi
         continue
     fi
 
     if is_junk_text "$transcript"; then
         log "  Junk transcript for $base (<= ${JUNK_MAX_BYTES} bytes / whitespace / dot-only); deleting audio segment."
-        rm -f "$wav"
-        fail=$((fail + 1))
+        printf 'junk\n' > "$TRANSCRIPT_DIR/.rejected/$base"
+        rm -f "$wav" "$wav.retry"
         continue
     fi
 
-    echo "$transcript" > "$txt_file"
+    tmp_txt=$(mktemp "$TRANSCRIPT_DIR/.transcript.XXXXXX")
+    printf '%s\n' "$transcript" > "$tmp_txt"
+    ! is_junk_file "$tmp_txt"
+    mv "$tmp_txt" "$txt_file"
+    rm -f "$wav.retry" "$TRANSCRIPT_DIR/.rejected/$base"
     date_dir="$(date_subdir "$base")"
     mkdir -p "$TRANSCRIBED_DIR/$date_dir"
     mv "$wav" "$TRANSCRIBED_DIR/$date_dir/"
@@ -271,157 +315,10 @@ for wav in "${wav_files[@]}"; do
 done
 
 log "Finished. Transcribed: $success, Failed: $fail, Pre-filtered: $prefiltered"
-
-# Cleanup junk segment files before merge to avoid polluting merged outputs.
-if [ -x "$HOME/.local/bin/hellotalk-cleanup-empty-segments.sh" ]; then
-    "$HOME/.local/bin/hellotalk-cleanup-empty-segments.sh" --quiet || true
+else
+    log "No files to transcribe."
 fi
 
-# Merge segment transcripts into per-recording files
-log "Merging segment transcripts..."
-shopt -s nullglob
-seg_files=("$TRANSCRIPT_DIR"/*_[0-9][0-9][0-9].txt)
-shopt -u nullglob
-
-# Collect unique base names
-declare -A bases
-for f in "${seg_files[@]}"; do
-    base=$(basename "$f" | sed 's/_[0-9]\{3\}\.txt$//')
-    bases["$base"]=1
-done
-for failed_root in "${FAILED_DIR_ROOTS[@]}"; do
-    [ -d "$failed_root" ] || continue
-    shopt -s nullglob
-    for wav in "$failed_root"/*/*_[0-9][0-9][0-9].wav; do
-        base=$(basename "$wav" .wav | sed 's/_[0-9]\{3\}$//')
-        bases["$base"]=1
-    done
-    shopt -u nullglob
-done
-
-if [ ${#bases[@]} -eq 0 ]; then
-    log "No segments to merge."
-    exit 0
-fi
-
-merged=0
-skipped_incomplete=0
-skipped_empty_only=0
-for base in "${!bases[@]}"; do
-    date_dir="$(date_subdir "$base")"
-    merged_file="$TRANSCRIPT_DIR/${base}.txt"
-
-    # Compute expected segment count from available audio segment indexes.
-    # We consider pending segments (Processed_audio), completed ones
-    # (Transcribed_audio/YYYY-MM-DD), and permanently failed ones
-    # (Failed_transcription/*) to avoid producing partial merged output.
-    max_seg=0
-    shopt -s nullglob
-    audio_candidates=(
-        "$PROCESSED_DIR/${base}_"[0-9][0-9][0-9].wav
-        "$TRANSCRIBED_DIR/$date_dir/${base}_"[0-9][0-9][0-9].wav
-    )
-    # Also count failed segments so they don't block merging.
-    for failed_root in "${FAILED_DIR_ROOTS[@]}"; do
-        [ -d "$failed_root" ] || continue
-        for fail_dir in "$failed_root"/*/; do
-            [ -d "$fail_dir" ] || continue
-            audio_candidates+=("$fail_dir/${base}_"[0-9][0-9][0-9].wav)
-        done
-    done
-    shopt -u nullglob
-    for af in "${audio_candidates[@]}"; do
-        seg_idx="${af##*_}"
-        seg_idx="${seg_idx%.wav}"
-        seg_num=$((10#$seg_idx))
-        (( seg_num > max_seg )) && max_seg=$seg_num
-    done
-
-    # Fallback for legacy data where audio files were removed already.
-    if [ "$max_seg" -eq 0 ]; then
-        shopt -s nullglob
-        txt_candidates=("$TRANSCRIPT_DIR/${base}_"[0-9][0-9][0-9].txt)
-        shopt -u nullglob
-        for tf in "${txt_candidates[@]}"; do
-            seg_idx="${tf##*_}"
-            seg_idx="${seg_idx%.txt}"
-            seg_num=$((10#$seg_idx))
-            (( seg_num > max_seg )) && max_seg=$seg_num
-        done
-    fi
-
-    incomplete=false
-    if [ "$max_seg" -gt 0 ]; then
-        for ((i=1; i<=max_seg; i++)); do
-            seg_name="${base}_$(printf '%03d' "$i").wav"
-            seg_txt="$TRANSCRIPT_DIR/${base}_$(printf '%03d' "$i").txt"
-            if [ -f "$seg_txt" ] && ! is_junk_file "$seg_txt"; then
-                continue
-            fi
-
-            # Permanently failed segments should not block merge.
-            failed_segment=false
-            for failed_root in "${FAILED_DIR_ROOTS[@]}"; do
-                [ -d "$failed_root" ] || continue
-                for fail_dir in "$failed_root"/*; do
-                    [ -d "$fail_dir" ] || continue
-                    if [ -f "$fail_dir/$seg_name" ]; then
-                        failed_segment=true
-                        break
-                    fi
-                done
-                if $failed_segment; then
-                    break
-                fi
-            done
-
-            if ! $failed_segment; then
-                incomplete=true
-                break
-            fi
-        done
-    fi
-
-    if $incomplete; then
-        log "Skipping merge for $base (incomplete segments, waiting for retry)."
-        skipped_incomplete=$((skipped_incomplete + 1))
-        continue
-    fi
-
-    # Concatenate usable segment transcripts in order.
-    # Per-segment .txt files are transcribe-internal and only needed until the
-    # merge succeeds; they are deleted right after the merge below to avoid the
-    # downstream cleanse/analyze stages double-counting segment + merged content.
-    tmp_merge="$(mktemp)"
-    usable_segments=0
-    if [ "$max_seg" -gt 0 ]; then
-        for ((i=1; i<=max_seg; i++)); do
-            seg_txt="$TRANSCRIPT_DIR/${base}_$(printf '%03d' "$i").txt"
-            if [ ! -f "$seg_txt" ]; then
-                continue
-            fi
-            if is_junk_file "$seg_txt"; then
-                continue
-            fi
-            cat "$seg_txt" >> "$tmp_merge"
-            usable_segments=$((usable_segments + 1))
-        done
-    fi
-
-    if [ "$usable_segments" -eq 0 ]; then
-        rm -f "$tmp_merge"
-        log "Skipping merge for $base (all segments are junk/failed; no usable segment transcripts)."
-        skipped_empty_only=$((skipped_empty_only + 1))
-        continue
-    fi
-
-    mv "$tmp_merge" "$merged_file"
-    log "Merged -> $base.txt ($(wc -l < "$merged_file") lines, usable_segments=$usable_segments, discovered_segments=$max_seg)"
-    # Merge succeeded: the per-segment transcript files are no longer needed
-    # (the merge loop above already consumed them this iteration). Delete them
-    # so cleanse.sh's Transcripts/*.txt glob no longer sees both representations.
-    rm -f "$TRANSCRIPT_DIR/${base}_"[0-9][0-9][0-9].txt
-    merged=$((merged + 1))
-done
-
-log "Merged $merged recording(s). Skipped incomplete: $skipped_incomplete, skipped all-junk: $skipped_empty_only"
+# Publish recording only after all manifest segments have a terminal status.
+python3 "$HOME/.local/bin/hellotalk-merge-recordings.py" "$PROCESSED_DIR" "$TRANSCRIBED_DIR" "$TRANSCRIPT_DIR" || fail=$((fail+1))
+[ "$fail" -eq 0 ]

@@ -46,9 +46,10 @@ for wav in "${wav_files[@]}"; do
     else
         recording_date=$(ffprobe -v error -show_entries format_tags=creation_time -of default=noprint_wrappers=1:nokey=1 "$wav" 2>/dev/null | cut -d'T' -f1 || true)
     fi
-    if [ "$recording_date" = "$CURRENT_DATE" ]; then
+    if [ "$recording_date" = "$CURRENT_DATE" ] && [ "${FORCE_PROCESS:-0}" != "1" ]; then
         # Keep the file: the device copy was already deleted by pull-audio,
         # so this local copy is the only one. Tomorrow's run processes it.
+        # Set FORCE_PROCESS=1 to override (e.g. manual run for same-day recordings).
         log "  Skipping file recorded today ($CURRENT_DATE); keeping for next run."
         rm -rf "$tmp_dir"
         continue
@@ -138,6 +139,7 @@ for wav in "${wav_files[@]}"; do
     fi
 
     # Step 3: Extract speech segments
+    printf 'building\n' > "$PROCESSED_DIR/$base.building"
     seg_num=0
     for i in "${!speech_starts[@]}"; do
         ss="${speech_starts[$i]}"
@@ -151,11 +153,20 @@ for wav in "${wav_files[@]}"; do
 
         seg_num=$((seg_num + 1))
         out="$PROCESSED_DIR/${base}_$(printf '%03d' $seg_num).wav"
-        tmp_out="$PROCESSED_DIR/.tmp_${base}_$(printf '%03d' $seg_num).wav"
+        tmp_out="$tmp_dir/${base}_$(printf '%03d' $seg_num).wav"
         ffmpeg -i "$denoised" -ss "$ss" -t "$seg_dur" -c copy "$tmp_out" -y -loglevel error
-        mv "$tmp_out" "$out"
+        ffprobe -v error "$tmp_out" >/dev/null 2>&1
+        [ -s "$tmp_out" ]
     done
 
+    manifest_tmp=$(mktemp "$PROCESSED_DIR/.manifest.XXXXXX")
+    for ((n=1; n<=seg_num; n++)); do
+        name="${base}_$(printf '%03d' "$n").wav"
+        mv "$tmp_dir/$name" "$PROCESSED_DIR/$name"
+        printf '%s\n' "$name" >> "$manifest_tmp"
+    done
+    mv "$manifest_tmp" "$PROCESSED_DIR/$base.segments"
+    rm -f "$PROCESSED_DIR/$base.building"
     rm -rf "$tmp_dir"
 
     if [ "$seg_num" -eq 0 ]; then
