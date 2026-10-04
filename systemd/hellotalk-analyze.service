@@ -8,6 +8,9 @@ Type=oneshot
 ExecStart=%h/.local/bin/hellotalk-analyze.sh
 Environment=HOME=%h
 EnvironmentFile=%h/.config/hellotalk/env
+Environment=REQUEST_TIMEOUT=900
+Environment=ARTIFACT_TIMEOUT=2700
+Environment=BATCH_TIMEOUT=6900
 TimeoutStartSec=7200
 
 [Install]

@@ -1,7 +1,9 @@
 [Unit]
 Description=Cleanse HelloTalk transcripts (remove noise, artifacts, private content)
 After=hellotalk-transcribe.service
-OnSuccess=hellotalk-analyze.service
+# Analyze is decoupled: it runs on its own nightly timer (02:30) when the
+# custom provider is smooth. Cleanse can run any time without triggering
+# a daytime LLM call.
 
 [Service]
 Type=oneshot

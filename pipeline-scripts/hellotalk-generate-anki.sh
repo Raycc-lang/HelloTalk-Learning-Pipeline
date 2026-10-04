@@ -27,31 +27,16 @@ validate_and_filter_tsv() {
     local src="$1"
     local dest="$2"
     local tabs="$3"
-    local valid=0
-    local short=0
-    local long=0
-
-    : > "$dest"
-    while IFS= read -r line || [ -n "$line" ]; do
-        # Skip empty/blank lines
-        [ -z "${line//[$' \t']/}" ] && continue
-        count=$(printf '%s' "$line" | tr -cd '\t' | wc -c)
-        if [ "$count" -eq "$tabs" ]; then
-            printf '%s\n' "$line" >> "$dest"
-            ((valid++)) || true
-        elif [ "$count" -lt "$tabs" ]; then
-            ((short++)) || true
-        else
-            ((long++)) || true
-        fi
-    done < "$src"
-
-    # This log goes to stderr: the caller captures this function's stdout as the
-    # line count, so a log line on stdout would be read back as part of it.
-    if [ "$short" -gt 0 ] || [ "$long" -gt 0 ]; then
-        log "  TSV filter: $valid valid, $short rejected (< $tabs tabs), $long rejected (> $tabs tabs)" >&2
+    local valid total
+    _hv_tsv_filter "$src" > "$dest" || return 1
+    valid=$(wc -l < "$dest") || return 1
+    total=$(awk 'NF {n++} END {print n+0}' "$src") || return 1
+    if [ "$total" -eq 0 ] || [ $((valid * 100 / total)) -lt "${TSV_MIN_VALID_PCT:-90}" ]; then
+        log "TSV validation rejected output ($valid/$total valid rows)" >&2
+        echo 0
+    else
+        echo "$valid"
     fi
-    echo "$valid"
 }
 
 mkdir -p "$ANKI_DIR"
@@ -75,7 +60,7 @@ fi
 
 # shellcheck source=/dev/null
 . "$HOME/.local/bin/hellotalk-quota-check.sh"
-hellotalk_quota_check
+if ! hellotalk_variants_ready; then hellotalk_quota_check; fi
 
 log "Provider: $PROVIDER  Model: ${MODEL:-<default>}  API: $API_BASE"
 if [ "${VARIANTS:-0}" = "1" ]; then
@@ -110,13 +95,18 @@ for day_dir in "$ANALYSIS_DIR"/????-??-??; do
         output_file="$day_anki/$output_name"
 
         [ -s "$input_file" ] || continue
+        if ! source_has_text "$day_dir/merged.txt" || [ "$day_dir/merged.txt" -nt "$input_file" ] || ! _hv_output_sane "$input_file" analysis; then
+            log "Unready analysis: $input_file"
+            failed=$((failed+1))
+            continue
+        fi
         # source_has_text check removed: VERBATIM provenance check was
         # guarding against ASR-error corrections, blocking legitimate edits.
 
         # New input always regenerates. A changed prompt only regenerates
         # recent days (or under FORCE_REGEN=1) so a single prompt edit does
         # not invalidate every historical day of paid generation at once.
-        if [ -f "$output_file" ] && [ "$output_file" -nt "$input_file" ]; then
+        if [ "${FORCE_REGEN:-0}" != 1 ] && [ -s "$output_file" ] && _hv_output_sane "$output_file" tsv && [ "$output_file" -nt "$input_file" ]; then
             if [ "$output_file" -nt "$prompt_file" ]; then
                 log "Skipping $day/$output_name (up to date)."
                 ((skipped++)) || true
@@ -139,8 +129,8 @@ for day_dir in "$ANALYSIS_DIR"/????-??-??; do
         log "Generating $day/$output_name from $(basename "$input_file")..."
 
         tmpinput=$(mktemp)
-        tmpout=$(mktemp)
-        tmpvalidated=$(mktemp)
+        tmpout=$(mktemp "$(dirname "$output_file")/.generate.XXXXXX")
+        tmpvalidated=$(mktemp "$(dirname "$output_file")/.validated.XXXXXX")
         tmpstrictprompt=$(mktemp)
         sanitize_analysis_input "$input_file" "$tmpinput"
 
@@ -151,6 +141,7 @@ for day_dir in "$ANALYSIS_DIR"/????-??-??; do
             continue
         fi
 
+        job_ok=0
         attempt=0
         max_attempts=$(( TSV_RETRY_COUNT + 1 ))
         while [ $attempt -lt $max_attempts ]; do
@@ -183,6 +174,7 @@ RETRY_SUFFIX
 
                 if [ "$valid_lines" -gt 0 ]; then
                     mv "$tmpvalidated" "$output_file"
+                    job_ok=1
                     log "Done: $day/$output_name -> $valid_lines valid line(s)"
                     ((generated++)) || true
                     break
@@ -208,6 +200,9 @@ RETRY_SUFFIX
                         log "ERROR: $day/$output_name — timed out (${HARD_TIMEOUT}s hard limit)."
                         break  # don't retry on timeout
                         ;;
+                    1)
+                        log "Output/request failed; retrying with stricter prompt if budget allows."
+                        ;;
                     *)
                         log "ERROR: $day/$output_name — failed (rc=$rc)."
                         break  # don't retry on other errors
@@ -223,7 +218,7 @@ RETRY_SUFFIX
         done
 
         # If we exhausted all attempts without success
-        if [ $attempt -eq $max_attempts ] && [ ! -f "$output_file" ]; then
+        if [ "$job_ok" -ne 1 ]; then
             log "ERROR: $day/$output_name — failed after $max_attempts attempt(s)."
             ((failed++)) || true
         fi
@@ -234,3 +229,5 @@ done
 shopt -u nullglob
 
 log "Anki generation complete. Generated: $generated, Skipped: $skipped, Failed: $failed"
+
+[ "$failed" -eq 0 ]

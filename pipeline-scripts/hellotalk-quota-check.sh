@@ -18,7 +18,9 @@
 : "${HELLOTALK_QUOTA_DIR:=$HOME/.cache/hellotalk}"
 
 hellotalk_quota_sentinel_path() {
-    echo "$HELLOTALK_QUOTA_DIR/quota-block-${PROVIDER}"
+    local account
+    account=$(printf '%s\0%s' "${API_BASE:-}" "${API_KEY:-}" | sha256sum) || return 1
+    echo "$HELLOTALK_QUOTA_DIR/quota-block-${PROVIDER}-${account:0:16}"
 }
 
 hellotalk_quota_check() {
@@ -47,5 +49,5 @@ hellotalk_quota_check() {
     remaining=$(( expires_at - now ))
     echo "$(date '+%Y-%m-%d %H:%M:%S') [${LOG_TAG:-hellotalk}] QUOTA BLOCK active for PROVIDER=$PROVIDER (reason=$reason, ${remaining}s remaining): $msg" >&2
     echo "$(date '+%Y-%m-%d %H:%M:%S') [${LOG_TAG:-hellotalk}] Sentinel: $f (auto-clears at $(date -u -d "@$expires_at" '+%Y-%m-%dT%H:%M:%SZ'))" >&2
-    exit 75   # EX_TEMPFAIL
+    return 75   # EX_TEMPFAIL
 }

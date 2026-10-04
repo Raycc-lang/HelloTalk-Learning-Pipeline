@@ -2,8 +2,10 @@
 Description=Run HelloTalk AI analysis periodically
 
 [Timer]
-# Run every 6 hours, offset from cleanse timer
-OnCalendar=*-*-* 00/6:30:00
+# Run once nightly at 2:30am CST — custom provider is smooth at night.
+# Data from the day (pulled at noon, transcribed, cleansed at 00:00) is
+# ready for analysis by this time. Persistent=true catches up if missed.
+OnCalendar=*-*-* 02:30:00
 Persistent=true
 RandomizedDelaySec=60
 

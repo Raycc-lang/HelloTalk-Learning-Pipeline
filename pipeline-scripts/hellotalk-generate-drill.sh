@@ -91,7 +91,7 @@ fi
 
 # shellcheck source=/dev/null
 . "$HOME/.local/bin/hellotalk-quota-check.sh"
-hellotalk_quota_check
+if ! hellotalk_variants_ready; then hellotalk_quota_check; fi
 
 log "Provider: $PROVIDER  Model: ${MODEL:-<default>}  API: $API_BASE"
 if [ "${VARIANTS:-0}" = "1" ]; then
@@ -128,11 +128,16 @@ for day_dir in "$ANALYSIS_DIR"/????-??-??; do
         output_file="$day_drill/$output_name"
 
         [ -s "$input_file" ] || continue
+        if ! source_has_text "$day_dir/merged.txt" || [ "$day_dir/merged.txt" -nt "$input_file" ] || ! _hv_output_sane "$input_file" analysis; then
+            log "Unready analysis: $input_file"
+            failed=$((failed+1))
+            continue
+        fi
         # source_has_text check removed: VERBATIM provenance check was
         # guarding against ASR-error corrections, blocking legitimate edits.
 
         # Skip if output is up to date
-        if [ -f "$output_file" ] && [ "$output_file" -nt "$input_file" ] && [ "$output_file" -nt "$prompt_file" ]; then
+        if [ "${FORCE_REGEN:-0}" != 1 ] && [ -s "$output_file" ] && _hv_output_sane "$output_file" drill && [ "$output_file" -nt "$input_file" ] && [ "$output_file" -nt "$prompt_file" ]; then
             log "Skipping $day/$output_name (up to date)."
             ((skipped++)) || true
             continue
@@ -172,7 +177,7 @@ for day_dir in "$ANALYSIS_DIR"/????-??-??; do
             continue
         fi
 
-        tmpout=$(mktemp)
+        tmpout=$(mktemp "$(dirname "$output_file")/.generate.XXXXXX")
         rc=0
         VARIANT_OUT_DIR="$day_drill" \
             hellotalk_generate "$prompt_file" "$tmpinput" "$tmpout" drill "$day-$job_name" || rc=$?
@@ -212,3 +217,4 @@ done
 shopt -u nullglob
 
 log "Drill generation complete. Generated: $generated, Skipped: $skipped, Failed: $failed"
+[ "$failed" -eq 0 ]

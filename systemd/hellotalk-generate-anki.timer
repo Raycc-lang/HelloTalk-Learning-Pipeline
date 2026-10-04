@@ -2,8 +2,9 @@
 Description=Run HelloTalk Anki generation periodically
 
 [Timer]
-# Run 15 minutes after the analysis timer
-OnCalendar=*-*-* 00/6:45:00
+# Run once nightly at 4:00am CST — 1.5h after analyze starts, so analysis
+# is typically complete. Custom provider is smooth in the 2am-7am window.
+OnCalendar=*-*-* 04:00:00
 Persistent=true
 RandomizedDelaySec=60
 

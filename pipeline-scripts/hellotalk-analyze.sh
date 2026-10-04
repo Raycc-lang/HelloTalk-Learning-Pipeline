@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+batch_started=$(date +%s)
 
 # ── Directories ──────────────────────────────────────────────────────
 CLEANED_DIR="$HOME/Android/HelloTalkCapture/Cleaned_Transcripts"
@@ -43,7 +44,7 @@ fi
 
 # shellcheck source=/dev/null
 . "$HOME/.local/bin/hellotalk-quota-check.sh"
-hellotalk_quota_check
+if ! hellotalk_variants_ready; then hellotalk_quota_check; fi
 
 log "Provider: $PROVIDER  Model: $MODEL  Reasoning: ${REASONING_EFFORT:-provider-default}  API: $API_BASE"
 if [ "${VARIANTS:-0}" = "1" ]; then
@@ -62,154 +63,13 @@ fi
 
 log "Active prompts: ${!PROMPTS[*]}"
 
-# ── Step 1: Merge daily transcripts into Analysis/YYYY-MM-DD/ ───────
-log "Merging daily transcripts..."
-daily_merged=0
-
-shopt -s nullglob
-for date_dir in "$CLEANED_DIR"/????-??-??; do
-    [ -d "$date_dir" ] || continue
-    day="$(basename "$date_dir")"
-
-    individual=()
-    for f in "$date_dir"/hellotalk_mic_*.txt; do
-        individual+=("$f")
-    done
-
-    [ ${#individual[@]} -eq 0 ] && continue
-
-    day_analysis="$ANALYSIS_DIR/$day"
-    mkdir -p "$day_analysis"
-    merged="$day_analysis/merged.txt"
-
-    # A ".consolidated" marker means this day was previously folded into a
-    # later day. Reaching here means the plain source dir also exists again
-    # with matching transcripts — i.e. late recordings arrived after
-    # consolidation. Warn and proceed with the merge instead of silently
-    # dropping them.
-    src_dir="$(dirname "${individual[0]}")"
-    if [ -d "${src_dir}.consolidated" ]; then
-        log "WARNING: late transcripts arrived for previously-consolidated day $day — re-merging (not skipping)."
-    fi
-
-    # Find the newest individual transcript
-    newest_src=0
-    for f in "${individual[@]}"; do
-        ts=$(stat -c %Y "$f")
-        (( ts > newest_src )) && newest_src=$ts
-    done
-
-    # Skip merge if merged.txt exists and is newer than all sources
-    if [ -f "$merged" ]; then
-        merged_ts=$(stat -c %Y "$merged")
-        if (( merged_ts >= newest_src )); then
-            continue
-        fi
-    fi
-
-    # Rebuild merged.txt: sorted by filename (chronological)
-    tmpmerge=$(mktemp)
-    first=true
-    for f in $(printf '%s\n' "${individual[@]}" | sort); do
-        if $first; then
-            first=false
-        else
-            echo "" >> "$tmpmerge"
-        fi
-        cat "$f" >> "$tmpmerge"
-    done
-
-    mv "$tmpmerge" "$merged"
-    log "Merged $day: ${#individual[@]} recording(s) -> merged.txt ($(wc -l < "$merged") lines)"
-    ((daily_merged++)) || true
-done
-shopt -u nullglob
-
-log "Daily merge complete. $daily_merged day(s) updated."
-
-
-# ── Step 1.5: Consolidate sparse days ───────────────────────────────
-# Days with fewer than MERGE_MIN_LINES lines in merged.txt are merged
-# into the next day that has data, avoiding wasted API calls on thin content.
-log "Consolidating sparse days (threshold: $MERGE_MIN_LINES lines)..."
-
-shopt -s nullglob
-declare -a all_days=()
-for d in "$ANALYSIS_DIR"/????-??-??; do
-    [ -d "$d" ] && all_days+=("$(basename "$d")")
-done
-shopt -u nullglob
-
-# Sort chronologically
-IFS=$'\n' sorted_days=($(printf '%s\n' "${all_days[@]}" | sort)); unset IFS
-
-consolidated=0
-for i in "${!sorted_days[@]}"; do
-    day="${sorted_days[$i]}"
-    day_dir="$ANALYSIS_DIR/$day"
-    merged="$day_dir/merged.txt"
-
-    # Skip if directory was already removed by a prior consolidation
-    [ -d "$day_dir" ] || continue
-    [ -f "$merged" ] || continue
-
-    line_count=$(wc -l < "$merged")
-    if [ "$line_count" -lt "$MERGE_MIN_LINES" ]; then
-        # Never destroy a day that already carries completed (paid) LLM
-        # analysis outputs — consolidating would rm -rf them and orphan
-        # downstream artifacts keyed to this date.
-        if [ -s "$day_dir/grammar.md" ] || [ -s "$day_dir/semantic.md" ]; then
-            log "Sparse day $day already analyzed — keeping (not consolidating)."
-            continue
-        fi
-        # Find the next day that still exists (may have been consolidated too)
-        next_day=""
-        next_idx=$((i + 1))
-        while [ "$next_idx" -lt "${#sorted_days[@]}" ]; do
-            candidate="${sorted_days[$next_idx]}"
-            if [ -d "$ANALYSIS_DIR/$candidate" ]; then
-                next_day="$candidate"
-                break
-            fi
-            next_idx=$((next_idx + 1))
-        done
-
-        if [ -z "$next_day" ]; then
-            log "Sparse day $day ($line_count lines) — no next day to merge into, keeping as-is."
-            continue
-        fi
-
-        next_merged="$ANALYSIS_DIR/$next_day/merged.txt"
-
-        if [ -f "$next_merged" ]; then
-            # Prepend sparse day content with a date separator
-            tmpfile=$(mktemp)
-            {
-                echo "# ── Merged from $day ($line_count lines) ──"
-                cat "$merged"
-                echo ""
-                cat "$next_merged"
-            } > "$tmpfile"
-            mv "$tmpfile" "$next_merged"
-        else
-            # Next day has no merged.txt — move this one over
-            mkdir -p "$(dirname "$next_merged")"
-            mv "$merged" "$next_merged"
-        fi
-
-        # Remove the sparse day's analysis folder (only merged.txt + any analysis outputs)
-        rm -rf "$day_dir"
-        # Mark source directory as consolidated to prevent re-merging
-        src_dir="$CLEANED_DIR/$day"
-        if [ -d "$src_dir" ]; then
-            mv "$src_dir" "${src_dir}.consolidated"
-        fi
-        log "Consolidated $day ($line_count lines) -> $next_day"
-        ((consolidated++)) || true
-    fi
-done
-
-log "Consolidation complete. $consolidated sparse day(s) merged."
+# Persist source assignments before rebuilding; cleaned sources stay immutable.
+python3 "$HOME/.local/bin/hellotalk-merge-days.py" "$CLEANED_DIR" "$ANALYSIS_DIR" "$MERGE_MIN_LINES"
+: "${REQUEST_TIMEOUT:=900}"
+: "${ARTIFACT_TIMEOUT:=2700}"
+: "${BATCH_TIMEOUT:=6900}"
+BATCH_DEADLINE=$(( batch_started + BATCH_TIMEOUT ))
+export BATCH_DEADLINE ARTIFACT_TIMEOUT
 
 # ── Step 2: Run AI analysis on each day's merged transcript ─────────
 log "Starting AI analysis..."
@@ -219,8 +79,10 @@ skipped=0
 failed=0
 
 shopt -s nullglob
-for day_dir in "$ANALYSIS_DIR"/????-??-??; do
+mapfile -t analysis_days < <(printf '%s\n' "$ANALYSIS_DIR"/????-??-?? | sort -r)
+for day_dir in "${analysis_days[@]}"; do
     [ -d "$day_dir" ] || continue
+    [ ! -f "$day_dir/.consolidated-to" ] || continue
     day="$(basename "$day_dir")"
     merged="$day_dir/merged.txt"
 
@@ -238,7 +100,7 @@ for day_dir in "$ANALYSIS_DIR"/????-??-??; do
         # New input always regenerates. A changed prompt only regenerates
         # recent days (or under FORCE_REGEN=1) so a single prompt edit does
         # not invalidate every historical day of paid analysis at once.
-        if [ -f "$output_file" ] && [ "$output_file" -nt "$merged" ]; then
+        if [ "${FORCE_REGEN:-0}" != 1 ] && [ -s "$output_file" ] && _hv_output_sane "$output_file" analysis && [ "$output_file" -nt "$merged" ]; then
             if [ "$output_file" -nt "$prompt_file" ]; then
                 log "Skipping $day/$prompt_name (up to date)."
                 ((skipped++)) || true
@@ -259,10 +121,15 @@ for day_dir in "$ANALYSIS_DIR"/????-??-??; do
         fi
 
         file_bytes=$(wc -c < "$merged")
-        timeout_secs=$(( 1800 + (file_bytes / 120000) * 1200 ))
+        remaining=$(( BATCH_DEADLINE - $(date +%s) ))
+        if [ "$remaining" -lt "$ARTIFACT_TIMEOUT" ]; then
+            log "Batch budget reached; completed artifacts saved, remaining work deferred."
+            exit 75
+        fi
+        timeout_secs="$REQUEST_TIMEOUT"
         log "Analyzing $day with $prompt_name prompt (${file_bytes} bytes, timeout ${timeout_secs}s)..."
 
-        tmpout=$(mktemp)
+        tmpout=$(mktemp "$day_dir/.analysis.XXXXXX")
         rc=0
         HARD_TIMEOUT="$timeout_secs" VARIANT_OUT_DIR="$day_dir" \
             hellotalk_generate "$prompt_file" "$merged" "$tmpout" analysis "$day-$prompt_name" || rc=$?
@@ -304,3 +171,5 @@ done
 shopt -u nullglob
 
 log "Analysis complete. Analyzed: $analyzed, Skipped: $skipped, Failed: $failed"
+
+[ "$failed" -eq 0 ]
