@@ -84,13 +84,16 @@ if [ "$WAV_COUNT" -gt 0 ]; then
         if [ "$verify_ok" -eq 1 ]; then
             log "Pull verified: all staged .wav files present locally."
 
-            # Clear staged .wav files to avoid re-pulling duplicates next run
-            log "Clearing staged .wav files from $STAGING_DIR..."
-            $ADB -s "$DEVICE" shell "su -c 'rm -f ${STAGING_DIR}/*.wav'"
-
-            # Delete .wav originals from device
-            log "Deleting .wav files from device..."
-            $ADB -s "$DEVICE" shell "su -c 'rm -f ${REMOTE_DIR}/*.wav'"
+            # Delete only the exact recording verified against the staging copy.
+            # New/unmatched files appearing during pull are retained.
+            while IFS= read -r name; do
+                [[ "$name" =~ ^hellotalk_mic_[0-9]{8}_[0-9]{6}\.wav$ ]] || continue
+                remote_size=$($ADB -s "$DEVICE" shell "stat -c %s '$STAGING_DIR/$name'" | tr -d '\r[:space:]')
+                [ "$(stat -c %s "$LOCAL_DIR/$name")" = "$remote_size" ] || exit 1
+                ffprobe -v error "$LOCAL_DIR/$name" >/dev/null 2>&1 || exit 1
+                stem="${name%.wav}"
+                $ADB -s "$DEVICE" shell "su -c 'cmp -s $REMOTE_DIR/$name $STAGING_DIR/$name && rm -f $REMOTE_DIR/$name $REMOTE_DIR/$stem.pcm $STAGING_DIR/$name'" || exit 1
+            done <<< "$staged_files"
             wav_path_ok=1
         else
             log "ERROR: verification failed, missing/empty local files:$missing"
@@ -107,17 +110,5 @@ if [ "$WAV_COUNT" -gt 0 ]; then
     fi
 fi
 
-# Delete .pcm files from device (not needed, .wav has same data with header).
-# Only safe when the wav path fully succeeded, or there were no .wav files to begin with.
-pcm_deleted=0
-if [ "$PCM_COUNT" -gt 0 ] && { [ "$wav_path_ok" -eq 1 ] || [ "$WAV_COUNT" -eq 0 ]; }; then
-    log "Deleting .pcm files from device..."
-    $ADB -s "$DEVICE" shell "su -c 'rm -f ${REMOTE_DIR}/*.pcm'"
-    pcm_deleted=1
-fi
-
-if [ "$pcm_deleted" -eq 1 ]; then
-    log "Done. Pulled $WAV_COUNT .wav files, deleted $PCM_COUNT .pcm files."
-else
-    log "Done. Pulled $WAV_COUNT .wav files, $PCM_COUNT .pcm files not deleted."
-fi
+# A PCM without its own verified WAV is always retained.
+log "Done. Verified WAV recordings pulled; unmatched PCM files retained."

@@ -9,9 +9,13 @@ GRAMMAR_PROMPT="${GRAMMAR_PROMPT:-$PROMPT_DIR/anki-generator-grammar.md}"
 CHUNKS_PROMPT="${CHUNKS_PROMPT:-$PROMPT_DIR/anki-generator-semantic.md}"
 LLM_CALL="${LLM_CALL:-$HOME/.local/bin/hellotalk-llm-call.py}"
 HARD_TIMEOUT="${HARD_TIMEOUT:-2400}"
+TSV_RETRY_COUNT="${TSV_RETRY_COUNT:-1}"
+EXPECTED_TABS="${EXPECTED_TABS:-5}"   # 6 fields = exactly 5 tab separators
 LOG_TAG="hellotalk-anki"
 
-# Load env (API keys, PROVIDER, MODEL, etc.)
+# Load env (API keys, PROVIDER, MODEL, retry settings, etc.) — interactive
+# scripts run from CLI, so they must source the env file themselves (batch
+# scripts get it from systemd EnvironmentFile= instead).
 if [ -f "$HOME/.config/hellotalk/env" ]; then
     set -a
     # shellcheck source=/dev/null
@@ -19,16 +23,19 @@ if [ -f "$HOME/.config/hellotalk/env" ]; then
     set +a
 fi
 
-# Anki generation — low reasoning for quality card generation.
-: "${REASONING_EFFORT:=low}"
+# Anki generation — medium reasoning balances quality and cost.
+: "${REASONING_EFFORT:=medium}"
 export REASONING_EFFORT
+
+# Default to variants ON for interactive runs (cheap enough for a few days,
+# much better quality). Batch/systemd runs stay at VARIANTS=0 via the env file.
+: "${VARIANTS:=1}"
+export VARIANTS
 
 log() { echo "  $(date '+%H:%M:%S') $*"; }
 
 # shellcheck source=/dev/null
 . "$HOME/.local/bin/hellotalk-common.sh"
-
-EXPECTED_TABS="${EXPECTED_TABS:-5}"   # 6 fields = exactly 5 tab separators
 
 # Keep only lines with exactly EXPECTED_TABS tabs, mirroring the batch script.
 # A line with an extra tab imports with every later field shifted one column,
@@ -62,16 +69,28 @@ validate_and_filter_tsv() {
 # ── Resolve provider ────────────────────────────────────────────────────
 # shellcheck source=/dev/null
 . "$HOME/.local/bin/hellotalk-provider-resolve.sh"
+: "${MAX_TOKENS:=131072}"
 export API_BASE API_KEY MODEL MAX_TOKENS PROVIDER
 
-if [ -z "${API_KEY:-}" ]; then
-    echo "ERROR: API_KEY not set for PROVIDER=$PROVIDER." >&2
+# Multi-model variant generation (no-op unless VARIANTS=1, which is the
+# default for interactive runs). Sourced before the credential check so
+# a slot-only configuration — keys set per slot rather than ambiently —
+# is not rejected before it can be used.
+# shellcheck source=/dev/null
+. "$HOME/.local/bin/hellotalk-variants.sh"
+
+if [ -z "${API_KEY:-}" ] && ! hellotalk_variants_ready; then
+    echo "ERROR: API_KEY not set for PROVIDER=$PROVIDER, and no variant slot supplies one." >&2
     exit 1
 fi
 
 # shellcheck source=/dev/null
 . "$HOME/.local/bin/hellotalk-quota-check.sh"
 hellotalk_quota_check
+
+if [ "${VARIANTS:-0}" = "1" ]; then
+    log "Variants: ON — slots [$VARIANT_SLOTS], each deck costs 2 generations + 1 reconciliation."
+fi
 
 # ── Collect available days ──────────────────────────────────────────────
 declare -a DAYS=()
@@ -315,8 +334,8 @@ for day in "${SELECTED_DAYS[@]}"; do
 
         start_ts=$(date +%s)
         rc=0
-        timeout "$HARD_TIMEOUT" env LLM_CHUNK_HEADERS=0 python3 "$LLM_CALL" \
-            "$prompt" "$tmpinput" "$tmpout" 2>&1 || rc=$?
+        LLM_CHUNK_HEADERS=0 VARIANT_OUT_DIR="$day_anki" \
+            hellotalk_generate "$prompt" "$tmpinput" "$tmpout" tsv "$day-$jtype" || rc=$?
         elapsed=$(( $(date +%s) - start_ts ))
 
         if [ $rc -eq 0 ]; then

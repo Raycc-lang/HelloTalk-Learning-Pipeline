@@ -15,6 +15,13 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [$LOG_TAG] $*"; }
 . "$HOME/.local/bin/hellotalk-common.sh"
 
 mkdir -p "$CLEANED_DIR"
+filter_grep() {
+    local rc=0
+    grep "$@" || rc=$?
+    [ "$rc" -le 1 ]
+}
+filter_fingerprint=$( { cat "$CONFIG_FILE" 2>/dev/null || [ ! -e "$CONFIG_FILE" ]; cat "$0"; } | sha256sum)
+
 
 delete_matching_audio() {
     local transcript_base="$1"
@@ -79,9 +86,14 @@ ARTIFACT_PATTERNS=(
 )
 ARTIFACT_REGEX=$(printf "%s\n" "${ARTIFACT_PATTERNS[@]}" | paste -sd'|')
 
+# Validate regexes before touching any source or destination.
+for regex in "$NOISE_REGEX" "$ARTIFACT_REGEX" "$BLOCKLIST_REGEX"; do
+    filter_grep -E "$regex" </dev/null >/dev/null || exit 1
+done
+
 # ── Process transcripts ─────────────────────────────────────────────
 shopt -s nullglob
-txt_files=("$TRANSCRIPT_DIR"/*.txt)
+txt_files=("$CLEANSED_ORIGINALS_DIR"/????-??-??/*.txt "$TRANSCRIPT_DIR"/*.txt)
 shopt -u nullglob
 
 success=0
@@ -96,6 +108,7 @@ if [ ${#txt_files[@]} -gt 0 ]; then
     # Brute-force pre-clean: drop obvious junk before expensive cleansing.
     for src in "${txt_files[@]}"; do
         [ -f "$src" ] || continue
+        [[ "$(basename "$src")" =~ _[0-9]{3}\.txt$ ]] && continue
         if is_junk_file "$src"; then
             rm -f "$src"
             predeleted=$((predeleted + 1))
@@ -108,22 +121,31 @@ if [ ${#txt_files[@]} -gt 0 ]; then
 
     # Refresh list after pre-clean.
     shopt -s nullglob
-    txt_files=("$TRANSCRIPT_DIR"/*.txt)
+    txt_files=("$CLEANSED_ORIGINALS_DIR"/????-??-??/*.txt "$TRANSCRIPT_DIR"/*.txt)
     shopt -u nullglob
 
 for src in "${txt_files[@]}"; do
     base="$(basename "$src")"
     # Skip transcribe-internal per-segment files (<base>_NNN.txt). transcribe.sh
-    # now deletes them after a successful merge; this guards historical strays so
-    # segment + merged content isn't cleansed (and later analyzed) twice.
+    # retains these immutable inputs for recording rebuilds. Only the complete
+    # recording is cleansed so segment content is not counted twice.
     [[ "$base" =~ _[0-9]{3}\.txt$ ]] && continue
+    if [ "$src" = "$TRANSCRIPT_DIR/$base" ] && { [ -f "${src%.txt}.complete.json" ] || [ -f "$HOME/Android/HelloTalkCapture/Processed_audio/${base%.txt}.segments" ]; }; then
+        python3 - "$src" "${src%.txt}.complete.json" <<'CHECK'
+import hashlib, json, sys
+from pathlib import Path
+s, m = map(Path, sys.argv[1:])
+if hashlib.sha256(s.read_bytes()).hexdigest() != json.loads(m.read_text())['sha256']:
+    sys.exit(1)
+CHECK
+    fi
     date_dir="$(date_subdir "$base")"
     dest_dir="$CLEANED_DIR/$date_dir"
     mkdir -p "$dest_dir"
     dest="$dest_dir/$base"
 
     # Skip if already cleansed (output exists and is newer than source)
-    if [ -f "$dest" ] && [ "$dest" -nt "$src" ]; then
+    if [ -f "$dest.filter" ] && [ "$(cat "$dest.filter")" = "$filter_fingerprint" ] && [ "$dest.filter" -nt "$src" ]; then
         log "Skipping $base (already cleansed)."
         ((skipped++)) || true
         continue
@@ -139,12 +161,12 @@ for src in "${txt_files[@]}"; do
     #   5. Remove short lines (≤3 words)
     #   6. Strip leading/trailing whitespace per line
     #   7. Collapse multiple consecutive blank lines into one
-    tmpfile=$(mktemp)
+    tmpfile=$(mktemp "$dest_dir/.cleanse.XXXXXX")
 
     cat "$src" \
         | sed '/^[[:space:]]*$/d' \
-        | grep -viE "$NOISE_REGEX" \
-        | grep -viE "$ARTIFACT_REGEX" \
+        | filter_grep -viE "$NOISE_REGEX" \
+        | filter_grep -viE "$ARTIFACT_REGEX" \
         | python3 -c "
 import re, sys, unicodedata
 def is_english(line):
@@ -181,11 +203,11 @@ for line in sys.stdin:
         | awk 'NF > 3' \
         | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
         | cat -s \
-        > "$tmpfile" || true
+        > "$tmpfile"
 
     # Apply blocklist if patterns exist
     if [ -n "$BLOCKLIST_REGEX" ]; then
-        grep -viE "$BLOCKLIST_REGEX" "$tmpfile" > "${tmpfile}.2" || true
+        filter_grep -viE "$BLOCKLIST_REGEX" "$tmpfile" > "${tmpfile}.2"
         mv "${tmpfile}.2" "$tmpfile"
     fi
 
@@ -195,7 +217,7 @@ for line in sys.stdin:
         mv "$tmpfile" "$dest"
         orig_dir="$CLEANSED_ORIGINALS_DIR/$date_dir"
         mkdir -p "$orig_dir"
-        mv "$src" "$orig_dir/$base"
+        [ "$src" = "$orig_dir/$base" ] || mv "$src" "$orig_dir/$base"
         postdeleted=$((postdeleted + 1))
         if delete_matching_audio "$base"; then
             audio_deleted=$((audio_deleted + 1))
@@ -203,16 +225,18 @@ for line in sys.stdin:
         log "Done: $base — $line_count lines (source archived to Cleansed_Originals)"
         ((success++)) || true
     else
-        rm -f "$tmpfile"
+        rm -f "$tmpfile" "$dest"
         orig_dir="$CLEANSED_ORIGINALS_DIR/$date_dir"
         mkdir -p "$orig_dir"
-        mv "$src" "$orig_dir/$base"
+        [ "$src" = "$orig_dir/$base" ] || mv "$src" "$orig_dir/$base"
         postdeleted=$((postdeleted + 1))
         if delete_matching_audio "$base"; then
             audio_deleted=$((audio_deleted + 1))
         fi
         log "Deleted: $base — empty after cleansing (source archived to Cleansed_Originals)."
     fi
+    printf '%s\n' "$filter_fingerprint" > "$dest.filter.tmp"
+    mv "$dest.filter.tmp" "$dest.filter"
 done
 
 log "Finished. Cleansed: $success, Skipped: $skipped, Pre-deleted junk: $predeleted, Post-deleted sources: $postdeleted, Matching audio deleted: $audio_deleted"
